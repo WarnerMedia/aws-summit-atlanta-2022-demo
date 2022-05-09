@@ -1,0 +1,7 @@
+v1/env/cfn/codebuild/build/*
+v1/env/cfn/codebuild/test/*
+v1/env/cfn/codepipeline/*
+v1/env/cfn/iam/role/*
+v1/iac/cfn/codebuild/*
+v1/iac/cfn/codepipeline/*
+v1/iac/cfn/iam/role/*

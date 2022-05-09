@@ -1,0 +1,8 @@
+{
+  "Parameters": {
+    "ApprovalEnvironment": "prod",
+    "CannedAcl": "bucket-owner-full-control",
+    "CodeBuildRunLambdaTests": "No",
+    "CodeBuildRunInfrastructureTests": "No"
+  }
+}

@@ -1,0 +1,416 @@
+AWSTemplateFormatVersion: "2010-09-09"
+# NOTE: This template shouldn't spun up directly, it should always be called by the codepipeline template.
+Description: "Create a new ALB for a Lambda. - (v1.1.0)"
+Parameters:
+  # General Configuration
+  InfrastructureName:
+    Type: "String"
+    Description: "A name used to differentiate this infrastructure from other existing infrastructure."
+    Default: "main"
+  HealthCheckPath:
+    Type: "String"
+    Description: "What is the path of the health check?"
+    Default: "/hc/"
+  HealthCheckIntervalSeconds:
+    Type: "Number"
+    Description: "What is the interval (in seconds) between health checks?"
+    Default: 10
+  HealthCheckTimeoutSeconds:
+    Type: "Number"
+    Description: "What is the health check timeout in seconds."
+    Default: 5
+  HealthyThresholdCount:
+    Type: "Number"
+    Description: "How many times in a row should a health check fail before action is taken?"
+    Default: 2
+  # Networking
+  PublicLoadBalancer:
+    Type: "String"
+    Description: "Is this a public load balancer?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  LoadBalancerScheme:
+    Type: "String"
+    Description: "Should this template be internal only or Internet-facing?"
+    AllowedValues:
+    - "internal"
+    - "internet-facing"
+    Default: "internet-facing"
+  LoadBalancerPort:
+    Type: "Number"
+    Description: "What port should the load balancer be receiving traffic on?"
+    Default: 80
+  EnableAliasDualStack:
+    Type: "String"
+    Description: "Should DNS Dual Stack (IPv4/IPv6) be enabled for this service?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "No"
+  # SSL
+  LoadBalancerSecurePort:
+    Type: "Number"
+    Description: "What port should the load balancer be receiving secure traffic on?"
+    Default: 443
+  LoadBalancerSslPolicy:
+    Type: "String"
+    Description: "The SSL policy for this load balancer."
+    #Policy Details are here: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-https-listener.html#describe-ssl-policies
+    AllowedValues:
+    - "ELBSecurityPolicy-2016-08"
+    - "ELBSecurityPolicy-TLS-1-0-2015-04"
+    - "ELBSecurityPolicy-TLS-1-1-2017-01"
+    - "ELBSecurityPolicy-TLS-1-2-2017-01"
+    - "ELBSecurityPolicy-TLS-1-2-Ext-2018-06"
+    - "ELBSecurityPolicy-FS-2018-06"
+    - "ELBSecurityPolicy-FS-1-1-2019-08"
+    - "ELBSecurityPolicy-FS-1-2-2019-08"
+    - "ELBSecurityPolicy-FS-1-2-Res-2019-08"
+    Default: "ELBSecurityPolicy-FS-1-2-Res-2019-08"
+  # VPN Configuration
+  PublicLoadBalancerVpnRestriction:
+    Type: "String"
+    Description: "If this is a public load balancer, should we restrict access to the VPN?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  UseGlobalAllowedCidrBlockList:
+    Type: "String"
+    Description: "Should the global allowed CIDR Block list be used?  If \"No\", then the \"VpnCidrBlocks\" parameter will be used."
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  GlobalAllowedCidrBlockList:
+    Type: "AWS::SSM::Parameter::Value<List<String>>"
+    Description: "Get the list of CIDR blocks from the base infrastructure SSM parameter.  NOTE: Getting it this way because it is the only way to get a dynamic list from an SSM parameter."
+    Default: "/account/main/cidr-block/allowed/list"
+  VpnCidrBlocks:
+    Type: "CommaDelimitedList"
+    Description: "What are the current VPN CIDR Blocks?"
+    Default: "203.0.113.0/24"
+  # Lambda
+  LambdaArn:
+    Type: "String"
+    Description: "The ARN of the target Lambda."
+  # DNS
+  Subdomain:
+    Type: "String"
+    Description: "The subdomain name we want added for this service. Must be a subdomain of the hosted zone."
+    # Cross-Region DNS
+  Weight:
+    Type: "Number"
+    Description: "The weight given to the cross-region record set. For simple weighting, could add up to 10 or 100."
+    Default: 6
+  # Tags
+  TagEnvironment:
+    Type: "String"
+    Description: "What is the environment tag?"
+Conditions:
+  EnableAliasDualStack: !Equals [ !Ref EnableAliasDualStack, "Yes" ]
+  Production: !Equals [ !Ref TagEnvironment, "prod" ]
+  PublicLoadBalancer: !Equals [ !Ref PublicLoadBalancer, "Yes" ]
+  PublicLoadBalancerVpnRestriction: !Equals [ !Ref PublicLoadBalancerVpnRestriction, "Yes" ]
+  UseGlobalAllowedCidrBlockList: !Equals [ !Ref UseGlobalAllowedCidrBlockList, "Yes" ]
+Resources:
+  LoadBalancer:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      IpAddressType: !If [ EnableAliasDualStack, "dualstack", "ipv4" ]
+      Subnets:
+      - !If [ PublicLoadBalancer, !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/subnet/public/zone/one}}", !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/subnet/private/zone/one}}" ]
+      - !If [ PublicLoadBalancer, !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/subnet/public/zone/two}}", !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/subnet/private/zone/two}}" ]
+      - !If [ PublicLoadBalancer, !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/subnet/public/zone/three}}", !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/subnet/private/zone/three}}" ]
+      Scheme: !Ref LoadBalancerScheme
+      SecurityGroups:
+      - !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/security-group/load-balancer/application/public/id}}"
+      LoadBalancerAttributes:
+      - Key: "access_logs.s3.enabled"
+        Value: "true"
+      - Key: "access_logs.s3.bucket"
+        Value: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/logging/load-balancer/name}}"
+      - Key: "access_logs.s3.prefix"
+        Value: !Sub "lambda/${Subdomain}/${TagEnvironment}"
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  TargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    DependsOn: LoadBalancer
+    Properties:
+      TargetType: "lambda"
+      Targets:
+        - Id: !Ref LambdaArn
+      Matcher:
+        HttpCode: "200-299"
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckIntervalSeconds: !Ref HealthCheckIntervalSeconds
+      HealthCheckTimeoutSeconds: !Ref HealthCheckTimeoutSeconds
+      HealthyThresholdCount: !Ref HealthyThresholdCount
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  LoadBalancerListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      DefaultActions:
+      - Type: "redirect"
+        RedirectConfig:
+          Host: "#{host}"
+          Path: "/#{path}"
+          Port: !Ref LoadBalancerSecurePort
+          Protocol: "HTTPS"
+          Query: "#{query}"
+          StatusCode: "HTTP_301"
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: !Ref LoadBalancerPort
+      Protocol: "HTTP"
+  LoadBalancerSecureListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      DefaultActions:
+      - Type: "fixed-response"
+        FixedResponseConfig:
+          ContentType: "text/plain"
+          MessageBody: "401 - Unauthorized"
+          StatusCode: "401"
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: !Ref LoadBalancerSecurePort
+      Protocol: "HTTPS"
+      SslPolicy: !Ref LoadBalancerSslPolicy
+      Certificates:
+      - CertificateArn: !Sub "{{resolve:ssm:/acm/${InfrastructureName}/certificate/arn}}"
+  # Allow traffic from NAT EIPs.
+  SecureListenerRuleOne:
+    Type: "AWS::ElasticLoadBalancingV2::ListenerRule"
+    Properties:
+      ListenerArn: !Ref LoadBalancerSecureListener
+      Priority: 1
+      Conditions:
+      - Field: "source-ip"
+        SourceIpConfig:
+          Values:
+          - !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/availability-zone/nat/eip/cidr-block/one}}"
+          - !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/availability-zone/nat/eip/cidr-block/two}}"
+          - !Sub "{{resolve:ssm:/vpc/${InfrastructureName}/availability-zone/nat/eip/cidr-block/three}}"
+      Actions:
+      - Type: "forward"
+        TargetGroupArn: !Ref TargetGroup
+  # Allow traffic from additional CIDR blocks (such as VPNs).
+  SecureListenerRuleTwo:
+    Type: "AWS::ElasticLoadBalancingV2::ListenerRule"
+    Properties:
+      ListenerArn: !Ref LoadBalancerSecureListener
+      Priority: 2
+      Conditions:
+      - Field: "source-ip"
+        SourceIpConfig:
+          Values: !If [ PublicLoadBalancerVpnRestriction, !If [ UseGlobalAllowedCidrBlockList, !Ref GlobalAllowedCidrBlockList, !Ref VpnCidrBlocks ], [ "0.0.0.0/0","::/0" ] ]
+      Actions:
+      - Type: "forward"
+        TargetGroupArn: !Ref TargetGroup
+  DnsEntry:
+    Type: "AWS::Route53::RecordSet"
+    Properties:
+      HostedZoneId: !Sub "{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/id}}"
+      Comment: "DNS \"A ALIAS\" entry."
+      Name: !If [ Production, !Sub "${Subdomain}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "${Subdomain}-${TagEnvironment}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      Type: "A"
+      AliasTarget:
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        DNSName: !If [ EnableAliasDualStack, !Sub "dualstack.${LoadBalancer.DNSName}", !GetAtt LoadBalancer.DNSName ]
+        EvaluateTargetHealth: false
+  DnsEntryIpv6:
+    Type: "AWS::Route53::RecordSet"
+    Condition: EnableAliasDualStack
+    Properties:
+      HostedZoneId: !Sub "{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/id}}"
+      Comment: "DNS \"AAAA ALIAS\" entry."
+      Name: !If [ Production, !Sub "${Subdomain}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "${Subdomain}-${TagEnvironment}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      Type: "AAAA"
+      AliasTarget:
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        DNSName: !Sub "dualstack.${LoadBalancer.DNSName}"
+        EvaluateTargetHealth: false
+  CrossRegionDnsEntry:
+    Type: "AWS::Route53::RecordSet"
+    Properties:
+      HostedZoneId: !Sub "{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/id}}"
+      Comment: "DNS Cross-Region Alias entry."
+      Name: !If [ Production, !Sub "${Subdomain}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "${Subdomain}-${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      Type: "A"
+      SetIdentifier: !Sub "${Subdomain}-${TagEnvironment}-${AWS::Region}"
+      Weight: !Ref Weight
+      AliasTarget:
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        DNSName: !If [ EnableAliasDualStack, !Sub "dualstack.${LoadBalancer.DNSName}", !GetAtt LoadBalancer.DNSName ]
+  CrossRegionDnsEntryIpv6:
+    Type: "AWS::Route53::RecordSet"
+    Condition: EnableAliasDualStack
+    Properties:
+      HostedZoneId: !Sub "{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/id}}"
+      Comment: "DNS Cross-Region Alias entry."
+      Name: !If [ Production, !Sub "${Subdomain}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "${Subdomain}-${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      Type: "AAAA"
+      SetIdentifier: !Sub "${Subdomain}-${TagEnvironment}-${AWS::Region}"
+      Weight: !Ref Weight
+      AliasTarget:
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        DNSName: !Sub "dualstack.${LoadBalancer.DNSName}"
+Outputs:
+  LoadBalancerArn:
+    Description: "The load balancer ARN."
+    Value: !Ref LoadBalancer
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerArn"
+  LoadBalancerHostedZoneId:
+    Description: "The load balancer Canonical Hosted Zone ID."
+    Value: !GetAtt LoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerHostedZoneId"
+  LoadBalancerDnsName:
+    Description: "The load balancer DNS name."
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerDnsName"
+  LoadBalancerFullName:
+    Description: "The load balancer full name."
+    Value: !GetAtt LoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerFullName"
+  LoadBalancerName:
+    Description: "The load balancer short name."
+    Value: !GetAtt LoadBalancer.LoadBalancerName
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerName"
+  TargetGroupArn:
+    Description: "The target group ARN."
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-TargetGroupArn"
+  TargetGroupFullName:
+    Description: "The target group full name."
+    Value: !GetAtt TargetGroup.TargetGroupFullName
+    Export:
+      Name: !Sub "${AWS::StackName}-TargetGroupFullName"
+  TargetGroupName:
+    Description: "The target group short name."
+    Value: !GetAtt TargetGroup.TargetGroupName
+    Export:
+      Name: !Sub "${AWS::StackName}-TargetGroupName"
+  DnsEntry:
+    Description: "The DNS entry for this load balancer."
+    Value: !Ref DnsEntry
+    Export:
+      Name: !Sub "${AWS::StackName}-DnsEntry"
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: "General Configuration"
+      Parameters:
+      - InfrastructureName
+    - Label:
+        default: "Load Balancer Configuration"
+      Parameters:
+      - HealthCheckPath
+      - HealthCheckIntervalSeconds
+      - HealthCheckTimeoutSeconds
+      - HealthyThresholdCount
+      - PublicLoadBalancer
+      - LoadBalancerScheme
+      - LoadBalancerPort
+      - EnableAliasDualStack
+    - Label:
+        default: "Secure Certificate Configuration"
+      Parameters:
+      - LoadBalancerSecurePort
+      - LoadBalancerSslPolicy
+    - Label:
+        default: "VPN Configuration"
+      Parameters:
+      - PublicLoadBalancerVpnRestriction
+      - UseGlobalAllowedCidrBlockList
+      - GlobalAllowedCidrBlockList
+      - VpnCidrBlocks
+    - Label:
+        default: "Lambda Configuration"
+      Parameters:
+      - LambdaArn
+    - Label:
+        default: "Subdomain Configuration"
+      Parameters:
+      - Subdomain
+      - Weight
+    - Label:
+        default: "Tag Configuration"
+      Parameters:
+      - TagEnvironment
+    ParameterLabels:
+      InfrastructureName:
+        default: "Infrastructure Name:"
+      HealthCheckPath:
+        default: "Health Check Path:"
+      HealthCheckIntervalSeconds:
+        default: "Health Check Interval (in seconds):"
+      HealthCheckTimeoutSeconds:
+        default: "Health Check Timeout (in seconds):"
+      HealthyThresholdCount:
+        default: "Healthy Threshold Count:"
+      # Networking
+      PublicLoadBalancer:
+        default: "Public Load Balancer:"
+      LoadBalancerScheme:
+        default: "Load Balancer Scheme:"
+      LoadBalancerPort:
+        default: "Load Balancer Port:"
+      EnableAliasDualStack:
+        default: "Enable Alias Dual-Stack:"
+      # SSL
+      LoadBalancerSecurePort:
+        default: "Load Balancer Secure Port:"
+      LoadBalancerSslPolicy:
+        default: "Load Balancer SSL Policy:"
+      # VPN Configuration
+      PublicLoadBalancerVpnRestriction:
+        default: "Public Load Balancer VPN Restriction:"
+      UseGlobalAllowedCidrBlockList:
+        default: "Use Global Allowed CIDR Block List:"
+      GlobalAllowedCidrBlockList:
+        default: "Global Allowed CIDR Block List:"
+      VpnCidrBlocks:
+        default: "VPN CIDR Blocks:"
+      # Lambda
+      LambdaArn:
+        default: "Lambda ARN:"
+      # Regional DNS
+      Subdomain:
+        default: "Subdomain:"
+      Weight:
+        default: "Weight:"
+      # Tags
+      TagEnvironment:
+        default: "Environment:"

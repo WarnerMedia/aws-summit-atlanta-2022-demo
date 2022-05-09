@@ -1,0 +1,389 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Create a Lambda function."
+Parameters:
+  # General Configuration
+  InfrastructureName:
+    Type: "String"
+    Description: "A name used to differentiate this infrastructure from other existing infrastructure."
+    Default: "main"
+  AppBaseFolder:
+    Type: "String"
+    Description: "The base repository folder for the application."
+  # Lambda Function Configuration
+  RuntimeVersion:
+    Type: "String"
+    Description: "The Node.js version that should be used for this function."
+    Default: "nodejs14.x"
+  Timeout:
+    Type: "Number"
+    Description: "How long before the Lambda should time out (in seconds)?"
+    Default: 30
+  Name:
+    Type: "String"
+    Description: "The name we are giving this function."
+    Default: "simple-test-lambda"
+  ApplicationName:
+    Type: "String"
+    Description: "The application name to be displayed."
+  Handler:
+    Type: "String"
+    Description: "The handler for the function."
+    Default: "src/app.handler"
+  Version:
+    Type: "String"
+    Description: "This version number that we want to give the current Lambda code."
+  EnableLambdaVersion:
+    Type: "String"
+    Description: "Would you like to enable a Lambda version (NOTE: Only the most recent Lambda version is kept to make sure we do not run out of storage)?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "No"
+  ProvisionedConcurrentExecutions:
+    Type: "Number"
+    Description: "Provision/initialize a requested number of execution environments that are prepared to respond to your function's invocations."
+    Default: 1
+  GitCommit:
+    Type: "String"
+    Description: "This is the git commit hash."
+  S3Bucket:
+    Type: "String"
+    Description: "Set an alternate S3 bucket to get the Lambda ZIP file from."
+  S3Key:
+    Type: "String"
+    Description: "Set an alternate S3 key for the Lambda ZIP file.  If this is set, then the Function Version is ignored."
+  SecretRegion:
+    Type: "String"
+    Description: "In which region is the secret located?"
+  HealthCheckPath:
+    Type: "String"
+    Description: "What is the path of the health check?"
+    Default: "/hc/"
+  SecretArn:
+    Type: "String"
+    Description: "The ARN for the secret."
+  Realm:
+    Type: "String"
+    Description: "The realm is a signle word that will show up as part of the login prompt."
+  MaxAge:
+    Type: "Number"
+    Description: "The default number of seconds that the browser should cache objects from this site."
+    Default: 300
+  # Tag Configuration
+  TagEnvironment:
+    Type: "String"
+    Description: "Which environment are we deploying to?"
+Conditions:
+  AppBaseFolder: !Not [ !Equals [ !Ref AppBaseFolder, "" ] ]
+  EnableLambdaVersion: !Equals [ !Ref EnableLambdaVersion, "Yes" ]
+Resources:
+  LambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: "Allow"
+          Principal:
+            Service:
+            - "lambda.amazonaws.com"
+          Action:
+          - "sts:AssumeRole"
+      Policies:
+      - PolicyName: !Ref Name
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Resource: "arn:aws:logs:*:*:*"
+            Effect: "Allow"
+            Action:
+            - "logs:CreateLogGroup"
+            - "logs:CreateLogStream"
+            - "logs:PutLogEvents"
+          - Resource: "*"
+            Effect: "Allow"
+            Action:
+            - "kms:Decrypt"
+          - Resource: !Ref SecretArn
+            Effect: "Allow"
+            Action:
+            - "secretsmanager:GetSecretValue"
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  LambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: !Sub 
+      - "${Folder}${Handler}"
+      - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+      FunctionName: !Sub "${Name}-${TagEnvironment}"
+      Description: !Sub "${Version} (git-${GitCommit})"
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: !Ref RuntimeVersion
+      Timeout: !Ref Timeout
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: !Ref S3Key
+      Environment:
+        Variables:
+          APPLICATION_TITLE: !Ref ApplicationName
+          ENVIRONMENT: !Ref TagEnvironment
+          GIT_COMMIT: !Ref GitCommit
+          HEALTH_CHECK_PATH: !Ref HealthCheckPath
+          MAX_AGE: !Ref MaxAge
+          REALM: !Ref Realm
+          REGION: !Ref "AWS::Region"
+          SECRET_REGION: !Ref SecretRegion
+          SECRET_ARN: !Ref SecretArn
+          VERSION: !Ref Version
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  # The following resource name is a hack to work around a weird Lambda version implementation.
+  LambdaVersion<<VersionHash>>:
+    Type: "AWS::Lambda::Version"
+    Condition: EnableLambdaVersion
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      Description: !Ref Version
+      ProvisionedConcurrencyConfig:
+        ProvisionedConcurrentExecutions: !Ref ProvisionedConcurrentExecutions
+  EventLambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Principal: "elasticloadbalancing.amazonaws.com"
+  # SSM Parameters
+  ParamLambdaRoleName:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The Lambda role name."
+      Name: !Sub "/lambda/${InfrastructureName}/role/${Name}-${TagEnvironment}/name"
+      Tier: "Standard"
+      Type: "String"
+      Value: !Ref LambdaRole
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  ParamLambdaRoleId:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The Lambda role ID."
+      Name: !Sub "/lambda/${InfrastructureName}/role/${Name}-${TagEnvironment}/id"
+      Tier: "Standard"
+      Type: "String"
+      Value: !GetAtt LambdaRole.RoleId
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  ParamLambdaRoleArn:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The Lambda role ARN."
+      Name: !Sub "/lambda/${InfrastructureName}/role/${Name}-${TagEnvironment}/arn"
+      Tier: "Standard"
+      Type: "String"
+      Value: !GetAtt LambdaRole.Arn
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  ParamLambdaName:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The Lambda function name."
+      Name: !Sub "/lambda/${InfrastructureName}/function/${Name}-${TagEnvironment}/name"
+      Tier: "Standard"
+      Type: "String"
+      Value: !Ref LambdaFunction
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  ParamLambdaFunctionArn:
+    Type: "AWS::SSM::Parameter"
+    Properties:
+      DataType: "text"
+      Description: "The Lambda function ARN."
+      Name: !Sub "/lambda/${InfrastructureName}/function/${Name}-${TagEnvironment}/arn"
+      Tier: "Standard"
+      Type: "String"
+      Value: !GetAtt LambdaFunction.Arn
+      Tags:
+        Name: !Ref "AWS::StackName"
+        application: !Ref "AWS::StackName"
+        customer: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+        contact-email: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+        environment: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+        team: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+Outputs:
+  LambdaRoleName:
+    Description: "The Lambda role name."
+    Value: !Ref LambdaRole
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaRoleName"
+  LambdaRoleArn:
+    Description: "The Lambda role ARN."
+    Value: !GetAtt LambdaRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaRoleArn"
+  LambdaRoleId:
+    Description: "The Lambda role ID."
+    Value: !GetAtt LambdaRole.RoleId
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaRoleId"
+  LambdaName:
+    Description: "The Lambda function name."
+    Value: !Ref LambdaFunction
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaName"
+  LambdaVersion:
+    Description: "The current version number for this Lambda function."
+    Value: !Ref Version
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaVersion"
+  LambdaGitCommit:
+    Description: "The current git commit hash for this Lambda function."
+    Value: !Ref GitCommit
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaGitCommit"
+  LambdaFunctionArn:
+    Description: "The Lambda function ARN."
+    Value: !GetAtt LambdaFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaFunctionArn"
+  ParamLambdaRoleName:
+    Description: "The Lambda role name SSM parameter."
+    Value: !Ref ParamLambdaRoleName
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamLambdaRoleName"
+  ParamLambdaRoleId:
+    Description: "The Lambda role ID SSM parameter."
+    Value: !Ref ParamLambdaRoleId
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamLambdaRoleId"
+  ParamLambdaRoleArn:
+    Description: "The Lambda role ARN SSM parameter."
+    Value: !Ref ParamLambdaRoleArn
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamLambdaRoleArn"
+  ParamLambdaName:
+    Description: "The Lambda function name SSM parameter."
+    Value: !Ref ParamLambdaName
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamLambdaName"
+  ParamLambdaFunctionArn:
+    Description: "The Lambda function ARN SSM parameter."
+    Value: !Ref ParamLambdaFunctionArn
+    Export:
+      Name: !Sub "${AWS::StackName}-ParamLambdaFunctionArn"
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: "General Configuration"
+      Parameters:
+      - InfrastructureName
+      - AppBaseFolder
+    - Label:
+        default: "Lambda Function Configuration"
+      Parameters:
+      - Name
+      - ApplicationName
+      - Handler
+      - Version
+      - EnableLambdaVersion
+      - ProvisionedConcurrentExecutions
+      - GitCommit
+      - S3Bucket
+      - S3Key
+      - SecretRegion
+      - RuntimeVersion
+      - Timeout
+      - HealthCheckPath
+      - SecretArn
+      - Realm
+      - MaxAge
+    - Label:
+        default: "Tag Configuration"
+      Parameters:
+      - TagEnvironment
+    ParameterLabels:
+      InfrastructureName:
+        default: "Infrastructure Name:"
+      AppBaseFolder:
+        default: "Application BasebFolder:"
+      Name:
+        default: "Lambda Name:"
+      ApplicationName:
+        default: "Application Name:"
+      Handler:
+        default: "Handler:"
+      Version:
+        default: "Version:"
+      EnableLambdaVersion:
+        default: "Enable Lambda Version:"
+      ProvisionedConcurrentExecutions:
+        default: "Provisioned Concurrent Executions:"
+      GitCommit:
+        default: "Git Commit:"
+      S3Bucket:
+        default: "S3 Bucket:"
+      S3Key:
+        default: "S3 Key:"
+      SecretRegion:
+        default: "Secret Region:"
+      RuntimeVersion:
+        default: "Runtime Version:"
+      Timeout:
+        default: "Timeout:"
+      HealthCheckPath:
+        default: "Health Check Path:"
+      SecretArn:
+        default: "Secret ARN:"
+      Realm:
+        default: "Realm:"
+      MaxAge:
+        default: "Max Age (in seconds):"
+      TagEnvironment:
+        default: "Environment:"

@@ -1,0 +1,6 @@
+{
+  "Parameters": {
+    "ApplicationName": "AWS Summit Atlanta 2022 Demo (Integration)",
+    "EnableLambdaVersion": "No"
+  }
+}

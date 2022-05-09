@@ -1,0 +1,432 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Create a REST API Gateway for this Lambda service - (v1.1.1)"
+Parameters:
+  # General Configuration
+  InfrastructureName:
+    Type: "String"
+    Description: "A name used to differentiate this infrastructure from other existing infrastructure."
+    Default: "main"
+  ProjectName:
+    Type: "String"
+    Description: "The base name of the project (e.g. foo-bar-baz)."
+  AppBaseFolder:
+    Type: "String"
+    Description: "The base repository folder for the application."
+    Default: "v1"
+  # Gateway Configuration
+  GatewayStageName:
+    Type: "String"
+    Description: "The stage name for this API Gateway."
+    AllowedPattern: "[a-z0-9]+"
+    Default: "main"
+  GatewayHttpMethod:
+    Type: "String"
+    Description: "What HTTP method are we using with this API Gateway?"
+    Default: "GET"
+  EnableVpnRestriction:
+    Type: "String"
+    Description: "Should the VPN restriction be enabled?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  UseGlobalAllowedCidrBlockList:
+    Type: "String"
+    Description: "Should the global allowed CIDR Block list be used?  If \"No\", then the \"VpnCidrBlocks\" parameter will be used."
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  GlobalAllowedCidrBlockList:
+    Type: "AWS::SSM::Parameter::Value<List<String>>"
+    Description: "Get the list of CIDR blocks from the base infrastructure SSM parameter.  NOTE: Getting it this way because it is the only way to get a dynamic list from an SSM parameter."
+    Default: "/account/main/cidr-block/allowed/list"
+  VpnCidrBlocks:
+    Type: "CommaDelimitedList"
+    Description: "What are the current VPN CIDR Blocks?"
+    Default: "203.0.113.0/24"
+  # Lambda Configuration
+  LambdaArn:
+    Type: "String"
+    Description: "The ARN of the Lambda function."
+  # DNS Configuration
+  CreateIpv6Record:
+    Type: "String"
+    Description: "Should the IPv6 DNS entries be added?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  Subdomain:
+    Type: "String"
+    Description: "The subdomain name we want added for this API Gateway. Must be a subdomain of the hosted zone."
+  Weight:
+    Type: "Number"
+    Description: "The weight given to the cross-region record set.  A weight like 12 is better than 10 because it can be divided more evenly."
+    Default: 6
+  # Tags
+  TagEnvironment:
+    Type: "String"
+    Description: "What is the environment tag?"
+Conditions:
+  CreateIpv6Record: !Equals [ !Ref CreateIpv6Record, "Yes" ]
+  EnableVpnRestriction: !Equals [ !Ref EnableVpnRestriction, "Yes" ]
+  Production: !Equals [ !Ref TagEnvironment, "prod" ]
+  UseGlobalAllowedCidrBlockList: !Equals [ !Ref UseGlobalAllowedCidrBlockList, "Yes" ]
+Resources:
+  LambdaApiGatewayInvoke:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref LambdaArn
+      Principal: "apigateway.amazonaws.com"
+  Gateway:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Description: !Sub "API Gateway for ${ProjectName}-${TagEnvironment}"
+      # The following 
+      Policy: !If
+        - EnableVpnRestriction
+        - !Sub
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": "execute-api:Invoke",
+                "Resource": "execute-api:/*/*/*"
+              },
+              {
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "execute-api:Invoke",
+                "Resource": "execute-api:/*/*/*",
+                "Condition": {
+                  "NotIpAddress": {
+                    "aws:SourceIp": [ "{{resolve:ssm:/vpc/${InfrastructureName}/availability-zone/nat/eip/cidr-block/one}}","{{resolve:ssm:/vpc/${InfrastructureName}/availability-zone/nat/eip/cidr-block/two}}","{{resolve:ssm:/vpc/${InfrastructureName}/availability-zone/nat/eip/cidr-block/three}}","{{resolve:ssm:/vpc/${InfrastructureName}/cidr/ipv4/block}}","${VpnIpList}" ]
+                  }
+                }
+              }]
+            }
+          - VpnIpList: !Join
+                        - "\",\""
+                        - !If [ UseGlobalAllowedCidrBlockList, !Ref GlobalAllowedCidrBlockList, !Ref VpnCidrBlocks ]
+        - |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "execute-api:Invoke",
+              "Resource": "execute-api:/*/*/*"
+            }]
+          }
+      EndpointConfiguration:
+        Types:
+          - "REGIONAL"
+      Name: !Sub "${ProjectName}-${TagEnvironment}"
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  GatewayRootMethod:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn: "Gateway"
+    Properties:
+      AuthorizationType: "NONE"
+      HttpMethod: !Ref GatewayHttpMethod
+      Integration:
+        IntegrationHttpMethod: "POST"
+        Type: "AWS_PROXY"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations"
+      ResourceId: !GetAtt Gateway.RootResourceId
+      RestApiId: !Ref Gateway
+  GatewayRootResource:
+    Type: "AWS::ApiGateway::Resource"
+    DependsOn: "Gateway"
+    Properties:
+      ParentId: !GetAtt Gateway.RootResourceId
+      RestApiId: !Ref Gateway
+      PathPart: !Ref AppBaseFolder
+  # This will results in a request path of /hc
+  GatewayHealthCheckResource:
+    Type: "AWS::ApiGateway::Resource"
+    DependsOn: "Gateway"
+    Properties:
+      ParentId: !GetAtt Gateway.RootResourceId
+      RestApiId: !Ref Gateway
+      PathPart: "hc"
+  GatewayHealthCheckMethod:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn:
+    - "Gateway"
+    - "GatewayHealthCheckResource"
+    Properties:
+      AuthorizationType: "NONE"
+      HttpMethod: "GET"
+      Integration:
+        IntegrationHttpMethod: "POST"
+        Type: "AWS_PROXY"
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+      ResourceId: !Ref GatewayHealthCheckResource
+      RestApiId: !Ref Gateway
+  # This will results in a request path of /v1/homepage
+  GatewayHomepageResource:
+    Type: "AWS::ApiGateway::Resource"
+    DependsOn:
+    - "Gateway"
+    - "GatewayRootResource"
+    Properties:
+      ParentId: !Ref GatewayRootResource
+      RestApiId: !Ref Gateway
+      PathPart: "homepage"
+  GatewayHomepageMethod:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn:
+    - "Gateway"
+    - "GatewayHomepageResource"
+    Properties:
+      AuthorizationType: "NONE"
+      HttpMethod: "GET"
+      Integration:
+        IntegrationHttpMethod: "POST"
+        Type: "AWS_PROXY"
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+      ResourceId: !Ref GatewayHomepageResource
+      RestApiId: !Ref Gateway
+  GatewayDeployment<<VersionHash>>:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn:
+    - "Gateway"
+    - "GatewayRootMethod"
+    - "GatewayHealthCheckMethod"
+    - "GatewayHomepageMethod"
+    Properties:
+      RestApiId: !Ref Gateway
+      StageName: !Ref GatewayStageName
+  # Additional DNS Entries
+  GatewayDomain:
+    Type: "AWS::ApiGateway::DomainName"
+    DependsOn: "GatewayDeployment<<VersionHash>>"
+    Properties:
+      DomainName: !If [ Production, !Sub "api-${Subdomain}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "api-${Subdomain}-${AWS::Region}.${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      RegionalCertificateArn: !Sub "{{resolve:ssm:/acm/${InfrastructureName}/certificate/arn}}"
+      SecurityPolicy: "TLS_1_2"
+      EndpointConfiguration:
+        Types:
+          - "REGIONAL"
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  GatewayCrossRegionDomain:
+    Type: "AWS::ApiGateway::DomainName"
+    DependsOn: "GatewayDeployment<<VersionHash>>"
+    Properties:
+      DomainName: !If [ Production, !Sub "api-${Subdomain}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "api-${Subdomain}.${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      RegionalCertificateArn: !Sub "{{resolve:ssm:/acm/${InfrastructureName}/certificate/arn}}"
+      SecurityPolicy: "TLS_1_2"
+      EndpointConfiguration:
+        Types:
+          - "REGIONAL"
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  GatewayBaseMapping:
+    DependsOn:
+    - "GatewayDeployment<<VersionHash>>"
+    - "GatewayDomain"
+    Type: "AWS::ApiGateway::BasePathMapping"
+    Properties:
+      DomainName: !Ref GatewayDomain
+      RestApiId: !Ref Gateway
+      Stage: !Ref GatewayStageName
+  GatewayCrossRegionBaseMapping:
+    DependsOn:
+    - "GatewayDeployment<<VersionHash>>"
+    - "GatewayCrossRegionDomain"
+    Type: "AWS::ApiGateway::BasePathMapping"
+    Properties:
+      DomainName: !Ref GatewayCrossRegionDomain
+      RestApiId: !Ref Gateway
+      Stage: !Ref GatewayStageName
+  DnsEntry:
+    Type: "AWS::Route53::RecordSet"
+    DependsOn:
+    - "Gateway"
+    - "GatewayDeployment<<VersionHash>>"
+    Properties:
+      HostedZoneId: !Sub "{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/id}}"
+      Comment: !Sub "DNS entry for ${ProjectName} API Gateway."
+      Name: !If [ Production, !Sub "api-${Subdomain}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "api-${Subdomain}-${AWS::Region}.${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      Type: "A"
+      AliasTarget:
+        HostedZoneId: !GetAtt GatewayDomain.RegionalHostedZoneId
+        DNSName: !GetAtt GatewayDomain.RegionalDomainName
+        EvaluateTargetHealth: false
+  DnsEntryIpv6:
+    Type: "AWS::Route53::RecordSet"
+    Condition: CreateIpv6Record
+    DependsOn:
+    - "Gateway"
+    - "GatewayDeployment<<VersionHash>>"
+    Properties:
+      HostedZoneId: !Sub "{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/id}}"
+      Comment: !Sub "DNS entry for ${ProjectName} API Gateway."
+      Name: !If [ Production, !Sub "api-${Subdomain}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "api-${Subdomain}-${AWS::Region}.${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      Type: "AAAA"
+      AliasTarget:
+        HostedZoneId: !GetAtt GatewayDomain.RegionalHostedZoneId
+        DNSName: !GetAtt GatewayDomain.RegionalDomainName
+        EvaluateTargetHealth: false
+  CrossRegionDnsEntry:
+    Type: "AWS::Route53::RecordSet"
+    DependsOn:
+    - "Gateway"
+    - "GatewayDeployment<<VersionHash>>"
+    Properties:
+      HostedZoneId: !Sub "{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/id}}"
+      Comment: !Sub "DNS Cross-Region entry for ${ProjectName} API Gateway."
+      Name: !If [ Production, !Sub "api-${Subdomain}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "api-${Subdomain}.${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      Type: "A"
+      SetIdentifier: !Sub "${Subdomain}-${TagEnvironment}-${AWS::Region}-api"
+      Weight: !Ref Weight
+      AliasTarget:
+        HostedZoneId: !GetAtt GatewayCrossRegionDomain.RegionalHostedZoneId
+        DNSName: !GetAtt GatewayCrossRegionDomain.RegionalDomainName
+  CrossRegionDnsEntryIpv6:
+    Type: "AWS::Route53::RecordSet"
+    Condition: CreateIpv6Record
+    DependsOn:
+    - "Gateway"
+    - "GatewayDeployment<<VersionHash>>"
+    Properties:
+      HostedZoneId: !Sub "{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/id}}"
+      Comment: !Sub "DNS Cross-Region entry for ${ProjectName} API Gateway."
+      Name: !If [ Production, !Sub "api-${Subdomain}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "api-${Subdomain}.${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+      Type: "AAAA"
+      SetIdentifier:  !Sub "${Subdomain}-${TagEnvironment}-${AWS::Region}-api"
+      Weight: !Ref Weight
+      AliasTarget:
+        HostedZoneId: !GetAtt GatewayCrossRegionDomain.RegionalHostedZoneId
+        DNSName: !GetAtt GatewayCrossRegionDomain.RegionalDomainName
+Outputs:
+  GatewayId:
+    Description: "The API Gateway ID."
+    Value: !Ref Gateway
+    Export:
+      Name: !Sub "${AWS::StackName}-GatewayId"
+  GatewayRootResourceId:
+    Description: "The API Gateway Root Resource ID."
+    Value: !GetAtt Gateway.RootResourceId
+    Export:
+      Name: !Sub "${AWS::StackName}-GatewayRootResourceId"
+  GatewayRootMethodId:
+    Description: "The API Gateway Root Method ID."
+    Value: !Ref GatewayRootMethod
+    Export:
+      Name: !Sub "${AWS::StackName}-GatewayRootMethodId"
+  GatewayDeploymentId:
+    Description: "The API Gateway Deployment ID."
+    Value: !Ref GatewayDeployment<<VersionHash>>
+    Export:
+      Name: !Sub "${AWS::StackName}-GatewayDeploymentId"
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: "General Configuration"
+      Parameters:
+      - InfrastructureName
+      - ProjectName
+      - AppBaseFolder
+    - Label:
+        default: "Gateway Configuration"
+      Parameters:
+      - GatewayStageName
+      - GatewayHttpMethod
+    - Label:
+        default: "VPN Configuration"
+      Parameters:
+      - EnableVpnRestriction
+      - UseGlobalAllowedCidrBlockList
+      - GlobalAllowedCidrBlockList
+      - VpnCidrBlocks
+    - Label:
+        default: "Lambda Function Configuration"
+      Parameters:
+      - LambdaArn
+    - Label:
+        default: "DNS Configuration"
+      Parameters:
+      - CreateIpv6Record
+      - Subdomain
+      - Weight
+    - Label:
+        default: "Tags"
+      Parameters:
+      - TagEnvironment
+    ParameterLabels:
+      # General Configuration
+      InfrastructureName:
+        default: "Infrastructure Name:"
+      ProjectName:
+        default: "Project Name:"
+      AppBaseFolder:
+        default: "Application Base Folder:"
+      # Gateway Configuration
+      GatewayStageName:
+        default: "Gateway Stage Name:"
+      GatewayHttpMethod:
+        default: "Gateway HTTP Method:"
+      # VPN Configuration
+      EnableVpnRestriction:
+        default: "Enable VPN Restriction:"
+      UseGlobalAllowedCidrBlockList:
+        default: "Use Global Allowed CIDR Block List:"
+      GlobalAllowedCidrBlockList:
+        default: "Global Allowed CIDR Block List:"
+      VpnCidrBlocks:
+        default: "VPN CIDR Blocks:"
+      # Lambda Configuration
+      LambdaArn:
+        default: "Lambda ARN:"
+      # DNS Configuration
+      CreateIpv6Record:
+        default: "Create IPv6 Record:"
+      Subdomain:
+        default: "Subdomain:"
+      Weight:
+        default: "Weight:"
+      # Tags
+      TagEnvironment:
+        default: "Environment:"

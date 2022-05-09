@@ -1,0 +1,7 @@
+{
+  "Parameters": {
+    "ActionMode": "REPLACE_ON_FAILURE",
+    "CodeBuildRunLambdaTests": "Yes",
+    "CodeBuildRunInfrastructureTests": "No"
+  }
+}

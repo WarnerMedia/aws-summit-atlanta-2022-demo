@@ -1,0 +1,1191 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Create the CodePipeline needed to deploy this service - (v1.0.2)"
+Parameters:
+  # General Configuration
+  InfrastructureName:
+    Type: "String"
+    Description: "A name used to differentiate this infrastructure from other existing infrastructure."
+    Default: "main"
+  SecondRegion:
+    Type: "String"
+    Description: "What is the second region this service should be deployed to?"
+    AllowedValues:
+    - "NONE"
+    - "us-east-1"
+    - "us-east-2"
+    - "us-west-2"
+    Default: "us-east-2"
+  # CodeBuild Configuration
+  CodeBuildLambdaTestProject:
+    Type: "String"
+    Description: "The name of the CodeBuild test project."
+  CodeBuildInfrastructureTestProject:
+    Type: "String"
+    Description: "The name of the CodeBuild infrastructure test project."
+  # CodeBuildPostProdProject:
+  #   Type: "String"
+  #   Description: "The name of the CodeBuild post-production project."
+  #   Default: ""
+  UnstableBranch:
+    Type: "String"
+    Description: "The branch used to build the unstable/DEV environment."
+    Default: ""
+  # CodePipeline Configuration
+  CloudFormationCapabilities:
+    Type: "String"
+    Description: "A list of the capabilities that CloudFormation should have when executing stacks via CodePipeline."
+    Default: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+  EnableRelease:
+    Type: "String"
+    Description: "Should the release Lambda functionality be enabled for this CodePipeline?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "No"
+  ProjectName:
+    Type: "String"
+    Description: "The specific name of the CodePipeline project."
+  AppBaseFolder:
+    Type: "String"
+    Description: "The base repository folder for the application."
+    Default: "v1"
+  ActionMode:
+    Type: "String"
+    Description: "The CodePipeline CloudFormation stack action mode."
+    AllowedValues:
+    - "CHANGE_SET_EXECUTE"
+    - "CHANGE_SET_REPLACE"
+    - "CREATE_UPDATE"
+    - "DELETE_ONLY"
+    - "REPLACE_ON_FAILURE"
+    Default: "CREATE_UPDATE"
+  # VersionFile:
+  #   Type: "String"
+  #   Description: "The name of the JSON file that contains the version number (needs to be a flat JSON file)."
+  #   Default: "git-metadata.json"
+  GitMetadataFile:
+    Type: "String"
+    Description: "The name of the JSON file that contains the git metadata (needs to be a flat JSON file)."
+    Default: "git-metadata.json"
+  # CodePipeline Notification Configuration
+  EnableNotifications:
+    Type: "String"
+    Description: "Should an e-mail SNS topic and Slack notification hook be enabled?  Please note this will only work the the Slack notifications Lambda has already been created for this region."
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  SlackNotificationLambda:
+    Type: "String"
+    Description: "What is the name of the function used to send out Slack notifications?"
+    Default: "slack-notification-prod"
+  # Source Configuration
+  BaseArtifactFolder:
+    Type: "String"
+    Description: "The base artifact folder (used mainly for service environment source files)."
+    Default: "base"
+  CannedAcl:
+    Type: "String"
+    Description: "The production S3 bucket access ARN."
+    AllowedValues:
+    - "private"
+    - "public-read"
+    - "public-read-write"
+    - "aws-exec-read"
+    - "authenticated-read"
+    - "bucket-owner-read"
+    - "bucket-owner-full-control"
+    - "log-delivery-write"
+    Default: "private"
+  SourceFolder:
+    Type: "String"
+    Description: "The name of the source folder."
+  TestSourceFile:
+    Type: "String"
+    Description: "The name of the ZIP file for the test source."
+    Default: "test.zip"
+  LambdaSourceFile:
+    Type: "String"
+    Description: "The name of the ZIP file for the service source."
+    Default: "lambda.zip"
+  LambdaEnvSourceFile:
+    Type: "String"
+    Description: "The name of the ZIP file for the service environment source."
+    Default: "lambda-env.zip"
+  LambdaSourcePollForChanges:
+    Type: "String"
+    Description: "Should the CodePipeline poll for Lambda source file changes?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  # Production Configuration
+  ProdBucket:
+    Type: "String"
+    Description: "The production artifact bucket."
+  # Test CodeBuild Configuration
+  CodeBuildRunLambdaTests:
+    Type: "String"
+    Description: "Are there CodeBuild-based application tests that should be run for this project?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "No"
+  CodeBuildRunInfrastructureTests:
+    Type: "String"
+    Description: "Are there CodeBuild-based infrastructure tests that should be run for this project?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "No"
+  # Manual Approval Configuration
+  ApprovalMessagePrefix:
+    Type: "String"
+    Description: "Message prefix to be displayed in the approval block."
+    Default: "Should this version of the application be promoted to the"
+  ApprovalEnvironment:
+    Type: "String"
+    Description: "The environment that the Docker image will move to next."
+    Default: ""
+  ApprovalMessageSuffix:
+    Type: "String"
+    Description: "Message prefix to be displayed in the approval block."
+    Default: "environment?"
+  # Service Configuration
+  # ServiceEnableCdn:
+  #   Type: "String"
+  #   Description: "Enabled the CDN for this environment."
+  #   AllowedValues:
+  #   - "Yes"
+  #   - "No"
+  #   Default: "No"
+  UserName:
+    Type: "String"
+    Description: "The Basic Auth. username."
+    Default: "DEFAULT"
+  Subdomain:
+    Type: "String"
+    Description: "What is the base name for the DNS entry? The environment will automatically be added to the end."
+    Default: "aws-summit-demo"
+  HealthCheckPath:
+    Type: "String"
+    Description: "What is the path of the health check?"
+    Default: "/hc"
+  # Application Load Balancer Configuration
+  EnableApplicationLoadBalancer:
+    Type: "String"
+    Description: "Should we enable the Application Load Balancer for this project?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "No"
+  # API Gateway Configuration
+  EnableApiGateway:
+    Type: "String"
+    Description: "Should we enable the API Gateway for this project?"
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  # Tags
+  TagEnvironment:
+    Type: "String"
+    Description: "What is the environment tag?"
+    AllowedValues:
+    - "dev"
+    - "int"
+    - "qa"
+    - "stage"
+    - "prod"
+    Default: "int"
+Conditions:
+  AppBaseFolder: !Not [ !Equals [ !Ref AppBaseFolder, "" ] ]
+  ApprovalEnvironment: !Not [ !Equals [ !Ref ApprovalEnvironment, "" ] ]
+  CodeBuildRunLambdaTests: !Equals [ !Ref CodeBuildRunLambdaTests, "Yes" ]
+  CodeBuildRunInfrastructureTests: !Equals [ !Ref CodeBuildRunInfrastructureTests, "Yes" ]
+  EnableApiGateway: !Equals [ !Ref EnableApiGateway, "Yes" ]
+  EnableApplicationLoadBalancer: !Equals [ !Ref EnableApplicationLoadBalancer, "Yes" ]
+  EnableNotifications: !Equals [ !Ref EnableNotifications, "Yes" ]
+  EnableRelease: !Equals [ !Ref EnableRelease, "Yes" ]
+  LambdaSourcePollForChanges: !Equals [ !Ref LambdaSourcePollForChanges, "Yes" ]
+  Production: !Equals [ !Ref TagEnvironment, "prod" ]
+  SecondRegion: !Not [ !Equals [ !Ref SecondRegion, "NONE" ] ]
+  # ServiceEnableCdn: !Equals [ !Ref ServiceEnableCdn, "Yes" ]
+  Stage: !Equals [ !Ref TagEnvironment, "stage" ]
+  EnableApiGatewaySecondRegion: !And
+  - !Condition EnableApiGateway
+  - !Condition SecondRegion
+  EnableApplicationLoadBalancerSecondRegion: !And
+  - !Condition EnableApplicationLoadBalancer
+  - !Condition SecondRegion
+  CodeBuildRunLambdaTestsSecondRegion: !And
+  - !Condition CodeBuildRunLambdaTests
+  - !Condition SecondRegion
+  CodeBuildRunInfrastructureTestsSecondRegion: !And
+  - !Condition CodeBuildRunInfrastructureTests
+  - !Condition SecondRegion
+Resources:
+  CodePipelineEventsRule:
+    Type: "AWS::Events::Rule"
+    Condition: EnableNotifications
+    Properties:
+      Name: !Sub "codepipeline-${ProjectName}-${TagEnvironment}"
+      Description: !Sub 'Events rule for e-mail and Slack notifications for the "${ProjectName}-${TagEnvironment}" CodePipeline.'
+      State: "ENABLED"
+      EventPattern:
+        source:
+        - "aws.codepipeline"
+        detail-type: # The following targets just the main CodePipeline states, you can also target individual stages (CodePipeline Stage Execution State Change) or actions (CodePipeline Action Execution State Change)
+        - "CodePipeline Pipeline Execution State Change"
+        # - "CodePipeline Stage Execution State Change"
+        # - "CodePipeline Action Execution State Change"
+        detail:
+          state: # These are the CodePipeline states: CANCELED, FAILED, RESUMED, STARTED, SUCCEEDED, and SUPERSEDED: https://docs.aws.amazon.com/codepipeline/latest/userguide/detect-state-changes-cloudwatch-events.html
+          - "CANCELED"
+          - "FAILED"
+          - "STARTED"
+          - "SUCCEEDED"
+          pipeline:
+          - !Sub "${ProjectName}-${TagEnvironment}"
+      Targets:
+      - Arn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${SlackNotificationLambda}"
+        Id: !Sub "slack-lambda-${ProjectName}-${TagEnvironment}"
+  CodePipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    Properties:
+      RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+      Name: !Sub "${ProjectName}-${TagEnvironment}"
+      RestartExecutionOnUpdate: true
+      ArtifactStores:
+      - Region: "us-east-1"
+        ArtifactStore:
+          Type: "S3"
+          Location: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/codepipeline/base-name}}-us-east-1"
+      - Region: "us-east-2"
+        ArtifactStore:
+          Type: "S3"
+          Location: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/codepipeline/base-name}}-us-east-2"
+      - Region: "us-west-2"
+        ArtifactStore:
+          Type: "S3"
+          Location: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/codepipeline/base-name}}-us-west-2"
+      Stages:
+      - Name: "Source"
+        Actions:
+        - Name: "Lambda_Source"
+          Namespace: "Lambda"
+          ActionTypeId:
+            Category: "Source"
+            Owner: "AWS"
+            Provider: "S3"
+            Version: "1"
+          Configuration:
+            S3Bucket: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/artifact/name}}"
+            S3ObjectKey: !Sub "${ProjectName}/${SourceFolder}/${LambdaSourceFile}"
+            PollForSourceChanges: !If [ LambdaSourcePollForChanges, "true", "false" ]
+          OutputArtifacts:
+          - Name: "LAMBDA_SOURCE_FILES"
+          RunOrder: 1
+        - Name: "Lambda_Env_Source"
+          Namespace: "LambdaEnv"
+          ActionTypeId:
+            Category: "Source"
+            Owner: "AWS"
+            Provider: "S3"
+            Version: "1"
+          Configuration:
+            S3Bucket: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/artifact/name}}"
+            #NOTE: This source always pulls from base so that we can pull it at any time from any environment.
+            S3ObjectKey: !Sub "${ProjectName}/${BaseArtifactFolder}/${LambdaEnvSourceFile}"
+            PollForSourceChanges: "false"
+          OutputArtifacts:
+          - Name: "LAMBDA_ENV_SOURCE_FILES"
+          RunOrder: 1
+        - Name: "Test_Source"
+          Namespace: "Test"
+          ActionTypeId:
+            Category: "Source"
+            Owner: "AWS"
+            Provider: "S3"
+            Version: "1"
+          Configuration:
+            S3Bucket: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/artifact/name}}"
+            S3ObjectKey: !Sub "${ProjectName}/${SourceFolder}/${TestSourceFile}"
+            PollForSourceChanges: "false"
+          OutputArtifacts:
+          - Name: "TEST_SOURCE_FILES"
+          RunOrder: 1
+      - !If
+        - CodeBuildRunLambdaTests
+        - Name: "Test_Lambda"
+          Actions:
+          - Name: "Run_Test_Build_Primary_Region"
+            ActionTypeId:
+              Category: "Test"
+              Owner: "AWS"
+              Provider: "CodeBuild"
+              Version: "1"
+            Configuration:
+              ProjectName: !Ref CodeBuildLambdaTestProject
+              PrimarySource: "TEST_SOURCE_FILES"
+              EnvironmentVariables: !Sub |
+                [
+                  {
+                    "name":"APP_BASE_FOLDER",
+                    "value":"${AppBaseFolder}",
+                    "type":"PLAINTEXT"
+                  }
+                ]
+            InputArtifacts:
+            - Name: "TEST_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: "TEST_LAMBDA_BUILD_PRIMARY_OUTPUT"
+            RunOrder: 1
+          - !If
+            - CodeBuildRunLambdaTestsSecondRegion
+            - Name: "Run_Test_Build_Secondary_Region"
+              ActionTypeId:
+                Category: "Test"
+                Owner: "AWS"
+                Provider: "CodeBuild"
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CodeBuildLambdaTestProject
+                PrimarySource: "TEST_SOURCE_FILES"
+                EnvironmentVariables: !Sub |
+                  [
+                    {
+                      "name":"APP_BASE_FOLDER",
+                      "value":"${AppBaseFolder}",
+                      "type":"PLAINTEXT"
+                    }
+                  ]
+              InputArtifacts:
+              - Name: "TEST_SOURCE_FILES"
+              OutputArtifacts:
+              - Name: "TEST_LAMBDA_BUILD_SECONDARY_OUTPUT"
+              RunOrder: 1
+              Region: !Ref SecondRegion
+            - !Ref "AWS::NoValue"
+        - !Ref "AWS::NoValue"
+      - Name: "Deploy"
+        Actions:
+        - Name: "Basic_Auth_Credentials"
+          ActionTypeId:
+            Category: "Deploy"
+            Owner: "AWS"
+            Provider: "CloudFormation"
+            Version: "1"
+          Configuration:
+            ActionMode: !Ref ActionMode
+            StackName: !Sub "${InfrastructureName}-secret-${ProjectName}-${TagEnvironment}"
+            Capabilities: !Ref CloudFormationCapabilities
+            TemplatePath:
+              Fn::Sub:
+              - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/secrets-manager/secret.yaml"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            TemplateConfiguration:
+              Fn::Sub:
+              - "LAMBDA_ENV_SOURCE_FILES::${Folder}env/cfn/secrets-manager/secret/${TagEnvironment}.json"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+            OutputFileName: "out.json"
+            ParameterOverrides: !Sub |
+              {
+                "InfrastructureName": "${InfrastructureName}",
+                "FunctionName": "${ProjectName}",
+                "UserName": "${UserName}",
+                "TagEnvironment": "${TagEnvironment}"
+              }
+          InputArtifacts:
+          - Name: "LAMBDA_SOURCE_FILES"
+          - Name: "LAMBDA_ENV_SOURCE_FILES"
+          OutputArtifacts:
+          - Name: "LAMBDA_SECRET_OUTPUT"
+          RunOrder: 1
+          Region: !Ref "AWS::Region"
+        - Name: "Prepare_Lambda_Source_First_Region"
+          ActionTypeId:
+            Category: "Deploy"
+            Owner: "AWS"
+            Provider: "S3"
+            Version: "1"
+          Configuration:
+            BucketName: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/artifact/name}}"
+            Extract: false
+            ObjectKey: !Sub "${ProjectName}/${TagEnvironment}/lambda-#{codepipeline.PipelineExecutionId}.zip"
+          InputArtifacts:
+          - Name: "LAMBDA_SOURCE_FILES"
+          RunOrder: 2
+          Region: !Ref "AWS::Region"
+        - !If
+          - SecondRegion
+          - Name: "Prepare_Lambda_Source_Second_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "S3"
+              Version: "1"
+            Configuration:
+              BucketName: !Sub
+              - "${AccountName}-${InfrastructureName}-artifact-${SecondRegion}"
+              - AccountName: "{{resolve:ssm:/account/name}}"
+              Extract: false
+              ObjectKey: !Sub "${ProjectName}/${TagEnvironment}/lambda-#{codepipeline.PipelineExecutionId}.zip"
+            InputArtifacts:
+            - Name: "LAMBDA_SOURCE_FILES"
+            RunOrder: 2
+            Region: !Ref SecondRegion
+          - !Ref "AWS::NoValue"
+        - Name: "Lambda_Function_First_Region"
+          Namespace: "PrimaryLambdaFunction"
+          ActionTypeId:
+            Category: "Deploy"
+            Owner: "AWS"
+            Provider: "CloudFormation"
+            Version: "1"
+          Configuration:
+            ActionMode: !Ref ActionMode
+            StackName: !Sub "${InfrastructureName}-function-${ProjectName}-${TagEnvironment}"
+            Capabilities: !Ref CloudFormationCapabilities
+            TemplatePath:
+              Fn::Sub:
+              - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/lambda/function.yaml"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            TemplateConfiguration:
+              Fn::Sub:
+              - "LAMBDA_ENV_SOURCE_FILES::${Folder}env/cfn/lambda/${TagEnvironment}.json"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+            OutputFileName: "out.json"
+            ParameterOverrides: !Sub
+            - |
+              {
+                "AppBaseFolder": "${AppBaseFolder}",
+                "Version": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "release" ] },
+                "GitCommit": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "shortRevision" ] },
+                "Name": "${ProjectName}",
+                "S3Bucket": "${Bucket}",
+                "S3Key": "${ProjectName}/${TagEnvironment}/lambda-#{codepipeline.PipelineExecutionId}.zip",
+                "SecretArn": { "Fn::GetParam" : [ "LAMBDA_SECRET_OUTPUT", "out.json", "SecretArn" ] },
+                "SecretRegion": "${AWS::Region}",
+                "Realm": "${TagEnvironment}",
+                "InfrastructureName": "${InfrastructureName}",
+                "TagEnvironment": "${TagEnvironment}"
+              }
+            - Bucket: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/artifact/name}}"
+          InputArtifacts:
+          - Name: "LAMBDA_SOURCE_FILES"
+          - Name: "LAMBDA_ENV_SOURCE_FILES"
+          - Name: "LAMBDA_SECRET_OUTPUT"
+          OutputArtifacts:
+          - Name: "LAMBDA_FUNCTION_FIRST_REGION_OUTPUT"
+          RunOrder: 3
+          Region: !Ref "AWS::Region"
+        - !If
+          - SecondRegion
+          - Name: "Lambda_Function_Second_Region"
+            Namespace: "SecondaryLambdaFunction"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-function-${ProjectName}-${TagEnvironment}"
+              Capabilities: !Ref CloudFormationCapabilities
+              TemplatePath:
+                Fn::Sub:
+                - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/lambda/function.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "LAMBDA_ENV_SOURCE_FILES::${Folder}env/cfn/lambda/${TagEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub
+              - |
+                {
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "Version": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "release" ] },
+                  "GitCommit": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "shortRevision" ] },
+                  "Name": "${ProjectName}",
+                  "S3Bucket": "${Bucket}",
+                  "S3Key": "${ProjectName}/${TagEnvironment}/lambda-#{codepipeline.PipelineExecutionId}.zip",
+                  "SecretArn": { "Fn::GetParam" : [ "LAMBDA_SECRET_OUTPUT", "out.json", "SecretArn" ] },
+                  "SecretRegion": "${AWS::Region}",
+                  "Realm": "${TagEnvironment}",
+                  "InfrastructureName": "${InfrastructureName}",
+                  "TagEnvironment": "${TagEnvironment}"
+                }
+              - Bucket: !Sub
+                - "${AccountName}-${InfrastructureName}-artifact-${SecondRegion}"
+                - AccountName: "{{resolve:ssm:/account/name}}"
+            InputArtifacts:
+            - Name: "LAMBDA_SOURCE_FILES"
+            - Name: "LAMBDA_ENV_SOURCE_FILES"
+            - Name: "LAMBDA_SECRET_OUTPUT"
+            OutputArtifacts:
+            - Name: "LAMBDA_FUNCTION_SECOND_REGION_OUTPUT"
+            RunOrder: 3
+            Region: !Ref SecondRegion
+          - !Ref "AWS::NoValue"
+        - !If
+          - EnableApplicationLoadBalancer
+          - Name: "Application_Load_Balancer_First_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-alb-${ProjectName}-${TagEnvironment}"
+              Capabilities: !Ref CloudFormationCapabilities
+              TemplatePath:
+                Fn::Sub:
+                - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/ec2/alb.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "LAMBDA_ENV_SOURCE_FILES::${Folder}env/cfn/ec2/alb/${TagEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "LambdaArn": { "Fn::GetParam" : [ "LAMBDA_FUNCTION_FIRST_REGION_OUTPUT", "out.json", "LambdaFunctionArn" ] },
+                  "Subdomain": "${Subdomain}",
+                  "TagEnvironment": "${TagEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "LAMBDA_SOURCE_FILES"
+            - Name: "LAMBDA_ENV_SOURCE_FILES"
+            - Name: "LAMBDA_FUNCTION_FIRST_REGION_OUTPUT"
+            OutputArtifacts:
+            - Name: "ALB_FIRST_REGION_OUTPUT"
+            RunOrder: 4
+            Region: !Ref "AWS::Region"
+          - !Ref "AWS::NoValue"
+        - !If
+          - EnableApplicationLoadBalancerSecondRegion
+          - Name: "Application_Load_Balancer_Second_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-alb-${ProjectName}-${TagEnvironment}"
+              Capabilities: !Ref CloudFormationCapabilities
+              TemplatePath:
+                Fn::Sub:
+                - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/ec2/alb.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "LAMBDA_ENV_SOURCE_FILES::${Folder}env/cfn/ec2/alb/${TagEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "LambdaArn": { "Fn::GetParam" : [ "LAMBDA_FUNCTION_SECOND_REGION_OUTPUT", "out.json", "LambdaFunctionArn" ] },
+                  "Subdomain": "${Subdomain}",
+                  "TagEnvironment": "${TagEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "LAMBDA_SOURCE_FILES"
+            - Name: "LAMBDA_ENV_SOURCE_FILES"
+            - Name: "LAMBDA_FUNCTION_SECOND_REGION_OUTPUT"
+            OutputArtifacts:
+            - Name: "ALB_SECOND_REGION_OUTPUT"
+            RunOrder: 4
+            Region: !Ref SecondRegion
+          - !Ref "AWS::NoValue"
+        - !If
+          - EnableApiGateway
+          - Name: "API_Gateway_First_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-api-gateway-${ProjectName}-${TagEnvironment}"
+              Capabilities: !Ref CloudFormationCapabilities
+              TemplatePath:
+                Fn::Sub:
+                - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/api-gateway/rest.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "LAMBDA_ENV_SOURCE_FILES::${Folder}env/cfn/api-gateway/rest/${TagEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "LambdaArn": { "Fn::GetParam" : [ "LAMBDA_FUNCTION_FIRST_REGION_OUTPUT", "out.json", "LambdaFunctionArn" ] },
+                  "Subdomain": "${Subdomain}",
+                  "TagEnvironment": "${TagEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "LAMBDA_SOURCE_FILES"
+            - Name: "LAMBDA_ENV_SOURCE_FILES"
+            - Name: "LAMBDA_FUNCTION_FIRST_REGION_OUTPUT"
+            OutputArtifacts:
+            - Name: "API_GATEWAY_FIRST_REGION_OUTPUT"
+            RunOrder: 5
+            Region: !Ref "AWS::Region"
+          - !Ref "AWS::NoValue"
+        - !If
+          - EnableApiGatewaySecondRegion
+          - Name: "API_Gateway_Second_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-api-gateway-${ProjectName}-${TagEnvironment}"
+              Capabilities: !Ref CloudFormationCapabilities
+              TemplatePath:
+                Fn::Sub:
+                - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/api-gateway/rest.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "LAMBDA_ENV_SOURCE_FILES::${Folder}env/cfn/api-gateway/rest/${TagEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "LambdaArn": { "Fn::GetParam" : [ "LAMBDA_FUNCTION_SECOND_REGION_OUTPUT", "out.json", "LambdaFunctionArn" ] },
+                  "Subdomain": "${Subdomain}",
+                  "TagEnvironment": "${TagEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "LAMBDA_SOURCE_FILES"
+            - Name: "LAMBDA_ENV_SOURCE_FILES"
+            - Name: "LAMBDA_FUNCTION_SECOND_REGION_OUTPUT"
+            OutputArtifacts:
+            - Name: "API_GATEWAY_SECOND_REGION_OUTPUT"
+            RunOrder: 5
+            Region: !Ref SecondRegion
+          - !Ref "AWS::NoValue"
+        - !If
+          - CodeBuildRunInfrastructureTests
+          - Name: "Run_Test_Build_Primary_Region"
+            ActionTypeId:
+              Category: "Test"
+              Owner: "AWS"
+              Provider: "CodeBuild"
+              Version: "1"
+            Configuration:
+              ProjectName: !Ref CodeBuildInfrastructureTestProject
+              PrimarySource: "TEST_SOURCE_FILES"
+              EnvironmentVariables: !Sub
+              - |
+                [
+                  {
+                    "name":"APP_BASE_FOLDER",
+                    "value":"${AppBaseFolder}",
+                    "type":"PLAINTEXT"
+                  },
+                  {
+                    "name":"SERVICE_DOMAIN",
+                    "value": "${RegionDomain}",
+                    "type":"PLAINTEXT"
+                  },
+                  {
+                    "name":"SERVICE_HEALTH_CHECK",
+                    "value": "${HealthCheckPath}",
+                    "type":"PLAINTEXT"
+                  }
+                ]
+              - RegionDomain:
+                  !If
+                  - Production
+                  - !If [ EnableApiGateway, !Sub "api-${Subdomain}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "${Subdomain}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+                  - !If [ EnableApiGateway, !Sub "api-${Subdomain}-${AWS::Region}.${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "${Subdomain}-${TagEnvironment}-${AWS::Region}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+            InputArtifacts:
+            - Name: "TEST_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: "TEST_INFRASTRUCTURE_BUILD_OUTPUT_PRIMARY_REGION"
+            RunOrder: 6
+          - !Ref "AWS::NoValue"
+        - !If
+          - CodeBuildRunInfrastructureTestsSecondRegion
+          - Name: "Run_Test_Build_Secondary_Region"
+            ActionTypeId:
+              Category: "Test"
+              Owner: "AWS"
+              Provider: "CodeBuild"
+              Version: "1"
+            Configuration:
+              ProjectName: !Ref CodeBuildInfrastructureTestProject
+              PrimarySource: "TEST_SOURCE_FILES"
+              EnvironmentVariables: !Sub
+              - |
+                [
+                  {
+                    "name":"APP_BASE_FOLDER",
+                    "value":"${AppBaseFolder}",
+                    "type":"PLAINTEXT"
+                  },
+                  {
+                    "name":"SERVICE_DOMAIN",
+                    "value": "${RegionDomain}",
+                    "type":"PLAINTEXT"
+                  },
+                  {
+                    "name":"SERVICE_HEALTH_CHECK",
+                    "value": "${HealthCheckPath}",
+                    "type":"PLAINTEXT"
+                  }
+                ]
+              - RegionDomain:
+                  !If
+                  - Production
+                  - !If [ EnableApiGatewaySecondRegion, !Sub "api-${Subdomain}-${SecondRegion}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "${Subdomain}-${SecondRegion}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+                  - !If [ EnableApiGatewaySecondRegion, !Sub "api-${Subdomain}-${SecondRegion}.${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}", !Sub "${Subdomain}-${TagEnvironment}-${SecondRegion}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}" ]
+            InputArtifacts:
+            - Name: "TEST_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: "TEST_INFRASTRUCTURE_BUILD_OUTPUT_SECONDARY_REGION"
+            RunOrder: 6
+            Region: !Ref SecondRegion
+          - !Ref "AWS::NoValue"
+        # - !If
+        #   - ServiceEnableCdn
+        #   - Name: "Content_Delivery_Network"
+        #     ActionTypeId:
+        #       Category: "Deploy"
+        #       Owner: "AWS"
+        #       Provider: "CloudFormation"
+        #       Version: "1"
+        #     Configuration:
+        #       ActionMode: !Ref ActionMode
+        #       StackName: !Sub "${InfrastructureName}-cdn-${Subdomain}-${TagEnvironment}"
+        #       Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+        #       TemplatePath:
+        #         Fn::Sub:
+        #         - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/cloudfront/distribution.yaml"
+        #         - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+        #       TemplateConfiguration:
+        #         Fn::Sub:
+        #         - "LAMBDA_ENV_SOURCE_FILES::${Folder}env/cfn/cloudfront/${TagEnvironment}.json"
+        #         - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+        #       RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+        #       OutputFileName: "out.json"
+        #       ParameterOverrides: !Sub |
+        #         {
+        #           "PrimaryCdnDomain": "${Subdomain}-${TagEnvironment}-cdn.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}",
+        #           "OriginDomain": { "Fn::GetParam" : [ "SERVICE_OUTPUT_PRIMARY_REGION", "out.json", "CrossRegionDomain" ] },
+        #           "LoggingPrefix": "${TagEnvironment}",
+        #           "OriginHeaderName": "{{resolve:secretsmanager:arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cloudfront/origin/header:SecretString:name}}",
+        #           "OriginHeaderValue": "{{resolve:secretsmanager:arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:cloudfront/origin/header:SecretString:value}}",
+        #           "TagEnvironment": "${TagEnvironment}"
+        #         }
+        #     InputArtifacts:
+        #     - Name: "LAMBDA_SOURCE_FILES"
+        #     - Name: "LAMBDA_ENV_SOURCE_FILES"
+        #     - Name: "SERVICE_OUTPUT_PRIMARY_REGION"
+        #     OutputArtifacts:
+        #     - Name: "CDN_OUTPUT_PRIMARY_REGION"
+        #     RunOrder: 4
+        #     Region: "us-east-1"
+        #   - !Ref "AWS::NoValue"
+        - !If
+          - ApprovalEnvironment
+          - Name: "Approval"
+            ActionTypeId:
+              Category: "Approval"
+              Owner: "AWS"
+              Provider: "Manual"
+              Version: "1"
+            Configuration:
+              CustomData: !Sub "${ApprovalMessagePrefix} \"${ApprovalEnvironment}\" ${ApprovalMessageSuffix}"
+              ExternalEntityLink: !Sub
+              - "https://${Domain}"
+              - Domain:
+                  !If
+                  - Production
+                  - !If [ EnableApiGateway, !Sub "api-${Subdomain}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}${HealthCheckPath}" , !Sub "${Subdomain}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}${HealthCheckPath}" ]
+                  - !If [ EnableApiGateway, !Sub "api-${Subdomain}.${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}${HealthCheckPath}" , !Sub "${Subdomain}-${TagEnvironment}.{{resolve:ssm:/route53/${InfrastructureName}/hosted-zone/domain-name}}${HealthCheckPath}" ]
+            RunOrder: 7
+          - !Ref "AWS::NoValue"
+      - !If
+        - ApprovalEnvironment
+        - Name: "Promote"
+          Actions:
+          - Name: "Promote_Test_Source"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "S3"
+              Version: "1"
+            Configuration:
+              BucketName: !If [ Stage, !Ref ProdBucket, !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/artifact/name}}" ]
+              Extract: false
+              ObjectKey: !Sub "${ProjectName}/${ApprovalEnvironment}/${TestSourceFile}"
+              CannedACL: !Ref CannedAcl
+            InputArtifacts:
+            - Name: "TEST_SOURCE_FILES"
+            RunOrder: 1
+            Region: !Ref "AWS::Region"
+          - Name: "Promote_Lambda_Source"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "S3"
+              Version: "1"
+            Configuration:
+              BucketName: !If [ Stage, !Ref ProdBucket, !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/artifact/name}}" ]
+              Extract: false
+              ObjectKey: !Sub "${ProjectName}/${ApprovalEnvironment}/${LambdaSourceFile}"
+              CannedACL: !Ref CannedAcl
+            InputArtifacts:
+            - Name: "LAMBDA_SOURCE_FILES"
+            RunOrder: 2
+            Region: !Ref "AWS::Region"
+          - !If
+            - EnableRelease
+            - Name: "GitHub_Variables"
+              Namespace: "GitHubVariables"
+              ActionTypeId:
+                Category: "Deploy"
+                Owner: "AWS"
+                Provider: "CloudFormation"
+                Version: "1"
+              Configuration:
+                ActionMode: !Ref ActionMode
+                StackName: !Sub "${InfrastructureName}-github-variables-${ProjectName}-${TagEnvironment}"
+                Capabilities: !Ref CloudFormationCapabilities
+                TemplatePath:
+                  Fn::Sub:
+                  - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/custom/github-variables.yaml"
+                  - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+                RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+                OutputFileName: "out.json"
+                ParameterOverrides: !Sub |
+                  {
+                    "CurrentRelease": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "release" ] },
+                    "GitShortCommit": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "shortRevision" ] },
+                    "GitFullCommit": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "fullRevision" ] },
+                    "GitOwner": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "organization" ] },
+                    "GitRepository": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "repository" ] },
+                    "PrevRelease": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "prevRelease" ] }
+                  }
+              InputArtifacts:
+              - Name: "LAMBDA_SOURCE_FILES"
+              OutputArtifacts:
+              - Name: "GITHUB_VARIABLES_OUTPUT"
+              RunOrder: 3
+              Region: !Ref "AWS::Region"
+            - !Ref "AWS::NoValue"
+          - !If
+            - EnableRelease
+            - Name: "GitHub_Release"
+              ActionTypeId:
+                Category: "Invoke"
+                Owner: "AWS"
+                Provider: "Lambda"
+                Version: "1"
+              Configuration:
+                FunctionName: !Sub "{{resolve:ssm:/lambda/${InfrastructureName}/function/codepipeline-github-release-prod/name}}"
+                UserParameters: !Sub
+                - |
+                  {
+                    "commit": "#{GitHubVariables.GitFullCommit}",
+                    "currentRelease": "#{GitHubVariables.CurrentRelease}",
+                    "mode": "createRelease",
+                    "owner": "#{GitHubVariables.GitOwner}",
+                    "prerelease": "${GitHubPrerelease}",
+                    "prevRelease": "#{GitHubVariables.PrevRelease}",
+                    "repository": "#{GitHubVariables.GitRepository}"
+                  }
+                - GitHubPrerelease: !If [ Production, false, true ]
+              InputArtifacts:
+              - Name: "GITHUB_VARIABLES_OUTPUT"
+              RunOrder: 4
+              Region: !Ref "AWS::Region"
+            - !Ref "AWS::NoValue"
+        - !Ref "AWS::NoValue"
+      - !If
+        - Production
+        - Name: "Post_Production"
+          Actions:
+          - !If
+            - EnableRelease
+            - Name: "GitHub_Variables"
+              Namespace: "GitHubVariables"
+              ActionTypeId:
+                Category: "Deploy"
+                Owner: "AWS"
+                Provider: "CloudFormation"
+                Version: "1"
+              Configuration:
+                ActionMode: !Ref ActionMode
+                StackName: !Sub "${InfrastructureName}-github-variables-${ProjectName}-${TagEnvironment}"
+                Capabilities: !Ref CloudFormationCapabilities
+                TemplatePath:
+                  Fn::Sub:
+                  - "LAMBDA_SOURCE_FILES::${Folder}iac/cfn/custom/github-variables.yaml"
+                  - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+                RoleArn: !Sub "{{resolve:ssm:/iam/${InfrastructureName}/role/codepipeline/${ProjectName}/deploy/arn}}"
+                OutputFileName: "out.json"
+                ParameterOverrides: !Sub |
+                  {
+                    "CurrentRelease": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "release" ] },
+                    "GitShortCommit": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "shortRevision" ] },
+                    "GitFullCommit": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "fullRevision" ] },
+                    "GitOwner": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "organization" ] },
+                    "GitRepository": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "repository" ] },
+                    "PrevRelease": { "Fn::GetParam" : [ "LAMBDA_SOURCE_FILES", "${GitMetadataFile}", "prevRelease" ] }
+                  }
+              InputArtifacts:
+              - Name: "LAMBDA_SOURCE_FILES"
+              OutputArtifacts:
+              - Name: "GITHUB_VARIABLES_PROD_OUTPUT"
+              RunOrder: 1
+              Region: !Ref "AWS::Region"
+            - !Ref "AWS::NoValue"
+          - !If
+            - EnableRelease
+            - Name: "GitHub_Release"
+              ActionTypeId:
+                Category: "Invoke"
+                Owner: "AWS"
+                Provider: "Lambda"
+                Version: "1"
+              Configuration:
+                FunctionName: !Sub "{{resolve:ssm:/lambda/${InfrastructureName}/function/codepipeline-github-release-prod/name}}"
+                UserParameters: !Sub
+                - |
+                  {
+                    "commit": "#{GitHubVariables.GitFullCommit}",
+                    "currentRelease": "#{GitHubVariables.CurrentRelease}",
+                    "mode": "updateRelease",
+                    "owner": "#{GitHubVariables.GitOwner}",
+                    "prerelease": "${GitHubPrerelease}",
+                    "prevRelease": "#{GitHubVariables.PrevRelease}",
+                    "repository": "#{GitHubVariables.GitRepository}"
+                  }
+                - GitHubPrerelease: !If [ Production, false, true ]
+              InputArtifacts:
+              - Name: "GITHUB_VARIABLES_PROD_OUTPUT"
+              RunOrder: 2
+              Region: !Ref "AWS::Region"
+            - !Ref "AWS::NoValue"
+          - Name: "GitHub_Create_Unstable_Branch"
+            ActionTypeId:
+              Category: "Invoke"
+              Owner: "AWS"
+              Provider: "Lambda"
+              Version: "1"
+            Configuration:
+              FunctionName: !Sub "{{resolve:ssm:/lambda/${InfrastructureName}/function/codepipeline-github-release-prod/name}}"
+              UserParameters: !Sub
+              - |
+                {
+                  "commit": "#{GitHubVariables.GitFullCommit}",
+                  "currentRelease": "#{GitHubVariables.CurrentRelease}",
+                  "mode": "createUnstableBranch",
+                  "owner": "#{GitHubVariables.GitOwner}",
+                  "prerelease": "${GitHubPrerelease}",
+                  "prevRelease": "#{GitHubVariables.PrevRelease}",
+                  "repository": "#{GitHubVariables.GitRepository}",
+                  "unstableBranch": "${UnstableBranch}"
+                }
+              - GitHubPrerelease: !If [ Production, false, true ]
+            InputArtifacts:
+            - Name: "GITHUB_VARIABLES_PROD_OUTPUT"
+            RunOrder: 3
+            Region: !Ref "AWS::Region"
+        - !Ref "AWS::NoValue"
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+Outputs:
+  CodePipeline:
+    Description: "The pipeline project created."
+    Value: !Ref CodePipeline
+    Export:
+      Name: !Sub "${AWS::StackName}-CodePipeline"
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: "General Configuration"
+      Parameters:
+      - InfrastructureName
+      - SecondRegion
+    - Label:
+        default: "CodePipeline Configuration"
+      Parameters:
+      - CloudFormationCapabilities
+      - EnableRelease
+      - ProjectName
+      - AppBaseFolder
+      - ActionMode
+    - Label:
+        default: "CodePipeline Notification Configuration"
+      Parameters:
+      - EnableNotifications
+      - SlackNotificationLambda
+    - Label:
+        default: "Source Configuration"
+      Parameters:
+      - BaseArtifactFolder
+      - CannedAcl
+      - SourceFolder
+      - LambdaSourceFile
+      - LambdaEnvSourceFile
+      - TestSourceFile
+      - LambdaSourcePollForChanges
+    - Label:
+        default: "Production Configuration"
+      Parameters:
+      - ProdBucket
+      - UnstableBranch
+    - Label:
+        default: "Testing Configuration"
+      Parameters:
+      - CodeBuildRunLambdaTests
+      - CodeBuildRunInfrastructureTests
+      - CodeBuildLambdaTestProject
+      - CodeBuildInfrastructureTestProject
+    - Label:
+        default: "Approval Configuration"
+      Parameters:
+      - ApprovalMessagePrefix
+      - ApprovalEnvironment
+      - ApprovalMessageSuffix
+    # - Label:
+    #     default: "Post-Production Configuration"
+    #   Parameters:
+    #   - CodeBuildPostProdProject
+    - Label:
+        default: "Service Configuration"
+      Parameters:
+      # - ServiceEnableCdn
+      - UserName
+      - Subdomain
+      - HealthCheckPath
+    - Label:
+        default: "Application Load Balancer Configuration"
+      Parameters:
+      - EnableApplicationLoadBalancer
+    - Label:
+        default: "API Gateway Configuration"
+      Parameters:
+      - EnableApiGateway
+    - Label:
+        default: "Tags"
+      Parameters:
+      - TagEnvironment
+    ParameterLabels:
+      # General Configuration
+      InfrastructureName:
+        default: "Infrastructure Name:"
+      SecondRegion:
+        default: "Second Region:"
+      # CodeBuild Configuration
+      CodeBuildLambdaTestProject:
+        default: "CodeBuild App Test Project Name:"
+      CodeBuildInfrastructureTestProject:
+        default: "CodeBuild Infrastructure Test Project Name:"
+      # CodePipeline Configuration
+      CloudFormationCapabilities:
+        default: "CloudFormation Capabilities:"
+      EnableRelease:
+        default: "Enable Release:"
+      ProjectName:
+        default: "CodePipeline Project Name:"
+      AppBaseFolder:
+        default: "CodePipeline Application Base Folder:"
+      ActionMode:
+        default: "CodePipeline CloudFormation Action Mode:"
+      # CodePipeline Notification Configuration
+      EnableNotifications:
+        default: "Enable E-mail and Slack Notifications:"
+      SlackNotificationLambda:
+        default: "Slack Notification Lambda Name:"
+      # Source Configuration
+      BaseArtifactFolder:
+        default: "Base Artifact Folder:"
+      CannedAcl:
+        default: "Canned ACL:"
+      SourceFolder:
+        default: "Source Folder:"
+      LambdaSourceFile:
+        default: "Service Source File:"
+      LambdaEnvSourceFile:
+        default: "Service Environment Source File:"
+      LambdaSourcePollForChanges:
+        default: "Poll for Source Changes:"
+      TestSourceFile:
+        default: "Test Source File:"
+      ProdBucket:
+        default: "Production Bucket:"
+      # Testing Configuration
+      CodeBuildRunLambdaTests:
+        default: "Run Application Tests:"
+      CodeBuildRunInfrastructureTests:
+        default: "Run Infrastructure Tests:"
+      # Approval Configuration
+      ApprovalMessagePrefix:
+        default: "Approval Message Prefix:"
+      ApprovalEnvironment:
+        default: "Approval Environment:"
+      ApprovalMessageSuffix:
+        default: "Approval Message Suffix:"
+      # Post-Production Configuration
+      # CodeBuildPostProdProject:
+      #   default: "CodeBuild Post-Production Project:"
+      UnstableBranch:
+        default: "Unstable Branch:"
+      # Service Configuration
+      # ServiceEnableCdn:
+      #   default: "Service Enable CDN:"
+      UserName:
+        default: "Basic Auth. User Name:"
+      Subdomain:
+        default: "Subdomain:"
+      HealthCheckPath:
+        default: "Health Check Path:"
+      # Application Load Balancer Configuration
+      EnableApplicationLoadBalancer:
+        default: "Enable Application Load Balancer:"
+      # API Gateway Configuration
+      EnableApiGateway:
+        default: "Enable API Gateway:"
+      # Tags
+      TagEnvironment:
+        default: "Environment:"

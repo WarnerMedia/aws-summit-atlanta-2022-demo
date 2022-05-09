@@ -1,0 +1,7 @@
+{
+  "Parameters": {
+    "ApprovalEnvironment": "stage",
+    "CodeBuildRunLambdaTests": "No",
+    "CodeBuildRunInfrastructureTests": "No"
+  }
+}

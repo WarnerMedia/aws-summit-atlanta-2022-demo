@@ -1,0 +1,9 @@
+Transform: "AWS::Serverless-2016-10-31"
+Description: "Local function testing."
+Resources:
+  Function:
+    Type: "AWS::Serverless::Function"
+    Properties:
+      CodeUri: "../../" # This should put us as the same folder as package.json
+      Handler: "src/app.handler"
+      Runtime: "nodejs12.x"

@@ -1,0 +1,25 @@
+{
+  "name": "aws-summit-atlanta-2022-demo",
+  "version": "1.0.0",
+  "description": "Lambda CodePipeline trunk-based deployment flow.",
+  "main": "./src/app.js",
+  "repository": {
+    "type": "git"
+  },
+  "scripts": {
+    "test-lambda": "./node_modules/.bin/cucumber-js --format json:./test/cucumber/output/results.json ./test/cucumber/lambda/**/*.feature",
+    "test-infrastructure": "./node_modules/.bin/cucumber-js --format json:./test/cucumber/output/results.json ./test/cucumber/infrastructure/**/*.feature"
+  },
+  "author": "Warner Media, LLC",
+  "license": "MIT",
+  "dependencies": {
+    "basic-auth": "^1.1.0"
+  },
+  "devDependencies": {
+    "child_process": "^1.0.2",
+    "cucumber": "^6.0.5",
+    "dns": "^0.2.2",
+    "got": "^10.5.7",
+    "is-http2": "^1.2.0"
+  }
+}

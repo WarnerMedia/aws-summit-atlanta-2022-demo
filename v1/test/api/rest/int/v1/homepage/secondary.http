@@ -1,0 +1,2 @@
+GET https://api-aws-summit-demo-us-east-1.int.nonprod.example.com/v1/homepage HTTP/1.1
+content-type: text/html

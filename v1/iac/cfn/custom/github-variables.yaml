@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Create output variables of GitHub information."
+Parameters:
+  CurrentRelease:
+    Type: "String"
+    Description: "The current release version."
+    Default: ""
+  GitShortCommit:
+    Type: "String"
+    Description: "The short git hash."
+    Default: ""
+  GitFullCommit:
+    Type: "String"
+    Description: "The full git hash."
+    Default: ""
+  GitOwner:
+    Type: "String"
+    Description: "The git owner."
+    Default: ""
+  GitRepository:
+    Type: "String"
+    Description: "The git repository."
+    Default: ""
+  PrevRelease:
+    Type: "String"
+    Description: "The previous release version."
+    Default: ""
+Conditions:
+  DoNotCreate: !Equals [ "true", "false" ]
+Resources:
+  FakeResource:
+    Type: "Custom::FakeResource"
+    Condition: DoNotCreate
+Outputs:
+  CurrentRelease:
+    Description: "The current release version."
+    Value: !Ref CurrentRelease
+  GitShortCommit:
+    Description: "The short git hash."
+    Value: !Ref GitShortCommit
+  GitFullCommit:
+    Description: "The full git hash."
+    Value: !Ref GitFullCommit
+  GitOwner:
+    Description: "The git owner."
+    Value: !Ref GitOwner
+  GitRepository:
+    Description: "The git repository."
+    Value: !Ref GitRepository
+  PrevRelease:
+    Description: "The previous release version."
+    Value: !Ref PrevRelease
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: "GitHub Variables"
+      Parameters:
+      - CurrentRelease
+      - GitShortCommit
+      - GitFullCommit
+      - GitOwner
+      - GitRepository
+      - PrevRelease
+    ParameterLabels:
+      CurrentRelease:
+        default: "Current Release:"
+      GitShortCommit:
+        default: "Git Short Commit:"
+      GitFullCommit:
+        default: "Git Full Commit:"
+      GitOwner:
+        default: "Git Owner:"
+      GitRepository:
+        default: "Git Repository:"
+      PrevRelease:
+        default: "Previous Release:"

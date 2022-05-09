@@ -1,0 +1,5 @@
+v1/build/aws/codebuild/buildspec/test/*
+v1/build/aws/codebuild/test/*
+v1/src/*
+v1/test/*
+v1/package.json

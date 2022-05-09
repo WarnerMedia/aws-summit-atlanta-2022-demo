@@ -1,0 +1,7 @@
+{
+  "Parameters": {
+    "EnableRelease": "Yes",
+    "CodeBuildRunLambdaTests": "No",
+    "CodeBuildRunInfrastructureTests": "No"
+  }
+}

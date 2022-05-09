@@ -1,0 +1,1103 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Create the CodePipeline needed to build the base infrastructure for this service - (v1.1.0)"
+Parameters:
+  # General Configuration
+  InfrastructureName:
+    Type: "String"
+    Description: "A name used to differentiate this infrastructure from other existing infrastructure."
+    Default: "main"
+  SecondRegion:
+    Type: "String"
+    Description: "What is the second region this service should be deployed to?"
+    AllowedValues:
+    - "NONE"
+    - "us-east-1"
+    - "us-east-2"
+    - "us-west-2"
+    Default: "NONE"
+  # CodePipeline Configuration
+  ProjectName:
+    Type: "String"
+    Description: "The base name of the CodePipeline project (e.g. foo-bar-baz)."
+  InfrastructureSuffix:
+    Type: "String"
+    Description: "The suffix to add to the infrastructure CodePipeline."
+    Default: "infrastructure"
+  AppBaseFolder:
+    Type: "String"
+    Description: "The base repository folder for the application."
+    Default: "v1"
+  ActionMode:
+    Type: "String"
+    Description: "The CodePipeline CloudFormation stack action mode."
+    AllowedValues:
+    - "CHANGE_SET_EXECUTE"
+    - "CHANGE_SET_REPLACE"
+    - "CREATE_UPDATE"
+    - "DELETE_ONLY"
+    - "REPLACE_ON_FAILURE"
+    Default: "REPLACE_ON_FAILURE"
+  LambdaActionMode:
+    Type: "String"
+    Description: "The CodePipeline CloudFormation stack action mode."
+    AllowedValues:
+    - "CHANGE_SET_EXECUTE"
+    - "CHANGE_SET_REPLACE"
+    - "CREATE_UPDATE"
+    - "DELETE_ONLY"
+    - "REPLACE_ON_FAILURE"
+    Default: "REPLACE_ON_FAILURE"
+  # Manual Approval Configuration
+  ApprovalMessagePrefix:
+    Type: "String"
+    Description: "Message prefix to be displayed in the approval block."
+    Default: "Should the latest infrastructure changes for the"
+  ApprovalEnvironment:
+    Type: "String"
+    Description: "The environment for this approval."
+    Default: ""
+  ApprovalMessageSuffix:
+    Type: "String"
+    Description: "Message prefix to be displayed in the approval block."
+    Default: "environment be deployed?"
+  # Special Feature Configuration
+  EnableManualApproval:
+    Type: "String"
+    Description: "Enable initial manual approval step (used to prevent automatic update of production)."
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "No"
+  EnableCustomBuild:
+    Type: "String"
+    Description: "Enable custom command CodeBuild (for running any needed custom commands)."
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "No"
+  UnstableEnvironment:
+    Type: "String"
+    Description: "The short name for the unstable (stub) environment that code is merged into."
+    Default: "dev"
+  InitialEnvironment:
+    Type: "String"
+    Description: "The short name for the first environment that code is merged into."
+    Default: "int"
+  QaEnvironment:
+    Type: "String"
+    Description: "The short name for the quality assurance environment."
+    Default: "qa"
+  StageEnvironment:
+    Type: "String"
+    Description: "The short name for the staging environment."
+    Default: "stage"
+  ProdEnvironment:
+    Type: "String"
+    Description: "The short name for the production environment."
+    Default: "prod"
+  # CodePipeline Notification Configuration
+  EnableNotifications:
+    Type: "String"
+    Description: "Should an e-mail SNS topic and Slack notification hook be enabled?  Please note this will only work the the Slack notifications Lambda has already been created for this region."
+    AllowedValues:
+    - "Yes"
+    - "No"
+    Default: "Yes"
+  SlackNotificationLambda:
+    Type: "String"
+    Description: "What is the name of the function used to send out Slack notifications?"
+    Default: "slack-notification-prod"
+  # Source Configuration
+  GitHubOAuthTokenName:
+    Type: "String"
+    Description: "This is the name and key of the Secrets Manager secret which contains the GitHub OAuth token for source repository access."
+    Default: "account/main/github:oAuthToken"
+  UnstableBranch:
+    Type: "String"
+    Description: "The branch used to build the unstable/DEV environment."
+    Default: "dev"
+  # ZIP File Configuration
+  ExternalArtifactBucket:
+    Type: "String"
+    Description: "An external artifact bucket that we need to push files to from the current account."
+    Default: ""
+  InfrastructureSourceFile:
+    Type: "String"
+    Description: "The name of the ZIP file for the infrastructure source."
+    Default: "iac.zip"
+  TestSourceFile:
+    Type: "String"
+    Description: "The name of the ZIP file for the test source."
+    Default: "test.zip"
+  LambdaSourceFile:
+    Type: "String"
+    Description: "The name of the ZIP file for the service source."
+    Default: "lambda.zip"
+  LambdaEnvSourceFile:
+    Type: "String"
+    Description: "The name of the ZIP file for the service environment source."
+    Default: "lambda-env.zip"
+  # Service Configuration
+  ServiceSubdomain:
+    Type: "String"
+    Description: "What is the base name for the DNS entry? The environment will automatically be added to the end."
+    Default: "aws-summit-demo"
+  ServiceHealthCheckPath:
+    Type: "String"
+    Description: "What is the path of the health check?"
+    Default: "/hc/"
+  # Tags
+  TagEnvironment:
+    Type: "String"
+    Description: "What is the environment tag?"
+    AllowedValues:
+    - "nonprod"
+    - "prod"
+    - "single"
+    Default: "nonprod"
+Conditions:
+  AppBaseFolder: !Not [ !Equals [ !Ref AppBaseFolder, "" ] ]
+  EnableCustomBuild: !Equals [ !Ref EnableCustomBuild, "Yes" ]
+  EnableManualApproval: !Equals [ !Ref EnableManualApproval, "Yes" ]
+  EnableNotifications: !Equals [ !Ref EnableNotifications, "Yes" ]
+  UnstableEnvironment: !Not [ !Equals [ !Ref UnstableEnvironment, "NONE" ] ]
+  InitialEnvironment: !Not [ !Equals [ !Ref InitialEnvironment, "NONE" ] ]
+  ProdEnvironment: !Not [ !Equals [ !Ref ProdEnvironment, "NONE" ] ]
+  QaEnvironment: !Not [ !Equals [ !Ref QaEnvironment, "NONE" ] ]
+  StageEnvironment: !Not [ !Equals [ !Ref StageEnvironment, "NONE" ] ]
+  SecondRegion: !Not [ !Equals [ !Ref SecondRegion, "NONE" ] ]
+Resources:
+  InfrastructureCodePipelineEventsRule:
+    Type: "AWS::Events::Rule"
+    Condition: EnableNotifications
+    Properties:
+      Name: !Sub "codepipeline-${ProjectName}-${InfrastructureSuffix}"
+      Description: !Sub 'Events rule for Slack notifications for the "${ProjectName}-${InfrastructureSuffix}" CodePipeline.'
+      State: "ENABLED"
+      EventPattern:
+        source:
+        - "aws.codepipeline"
+        detail-type: # The following targets just the main CodePipeline states, you can also target individual stages (CodePipeline Stage Execution State Change) or actions (CodePipeline Action Execution State Change)
+        - "CodePipeline Pipeline Execution State Change"
+        # - "CodePipeline Stage Execution State Change"
+        # - "CodePipeline Action Execution State Change"
+        detail:
+          state: # These are the CodePipeline states: CANCELED, FAILED, RESUMED, STARTED, SUCCEEDED, and SUPERSEDED: https://docs.aws.amazon.com/codepipeline/latest/userguide/detect-state-changes-cloudwatch-events.html
+          - "CANCELED"
+          - "FAILED"
+          - "STARTED"
+          - "SUCCEEDED"
+          pipeline:
+          - !Sub "${ProjectName}-${InfrastructureSuffix}"
+      Targets:
+      - Arn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${SlackNotificationLambda}"
+        Id: !Sub "slack-lambda-${ProjectName}-${InfrastructureSuffix}"
+  InfrastructureServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: "Allow"
+          Principal:
+            Service:
+            - "cloudformation.amazonaws.com"
+            - "codepipeline.amazonaws.com"
+          Action:
+          - "sts:AssumeRole"
+      Policies:
+      - PolicyName: "InfrastructureServiceRole"
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: "Allow"
+            Action:
+            - "iam:AttachRolePolicy"
+            - "iam:CreateRole"
+            - "iam:CreateServiceLinkedRole"
+            - "iam:DeleteRole"
+            - "iam:DeleteRolePermissionsBoundary"
+            - "iam:DeleteRolePolicy"
+            - "iam:DeleteServiceLinkedRole"
+            - "iam:DetachRolePolicy"
+            - "iam:GetRole"
+            - "iam:GetRolePolicy"
+            - "iam:GetServiceLinkedRoleDeletionStatus"
+            - "iam:ListAttachedRolePolicies"
+            - "iam:ListInstanceProfilesForRole"
+            - "iam:ListRolePolicies"
+            - "iam:ListRoleTags"
+            - "iam:PassRole"
+            - "iam:PutRolePermissionsBoundary"
+            - "iam:PutRolePolicy"
+            - "iam:TagRole"
+            - "iam:UntagRole"
+            - "iam:UpdateAssumeRolePolicy"
+            - "iam:UpdateRole"
+            - "iam:UpdateRoleDescription"
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+            - "kms:*"
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+            - "logs:*"
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+            - "route53:GetHostedZone"
+            - "route53:ChangeResourceRecordSets"
+            - "route53:Get*"
+            - "route53:List*"
+            - "route53:Create*"
+            - "route53:Delete*"
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+            - "cloudwatch:DescribeAlarms"
+            - "cloudwatch:GetMetricStatistics"
+            - "cloudwatch:PutMetricAlarm"
+            - "cloudwatch:DeleteAlarms"
+            - "sns:ListSubscriptions"
+            - "sns:ListTopics"
+            - "sns:Publish"
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+            - "ssm:AddTagsToResource"
+            - "ssm:DeleteParameter"
+            - "ssm:DeleteParameters"
+            - "ssm:DescribeDocumentParameters"
+            - "ssm:DescribeParameters"
+            - "ssm:GetParameter"
+            - "ssm:GetParameterHistory"
+            - "ssm:GetParameters"
+            - "ssm:GetParametersByPath"
+            - "ssm:LabelParameterVersion"
+            - "ssm:ListTagsForResource"
+            - "ssm:PutParameter"
+            - "ssm:RemoveTagsFromResource"
+            Resource: "*"
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+      - "arn:aws:iam::aws:policy/AWSCloudFormationFullAccess"
+      - "arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess"
+      - "arn:aws:iam::aws:policy/AWSCodePipeline_FullAccess"
+      - "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
+      - "arn:aws:iam::aws:policy/IAMFullAccess"
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/environment}}"
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+  InfrastructureCodePipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    Properties:
+      RoleArn: !GetAtt InfrastructureServiceRole.Arn
+      Name: !Sub "${ProjectName}-${InfrastructureSuffix}"
+      RestartExecutionOnUpdate: true
+      ArtifactStores:
+      - Region: "us-east-1"
+        ArtifactStore:
+          Type: "S3"
+          Location: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/codepipeline/base-name}}-us-east-1"
+      - Region: "us-east-2"
+        ArtifactStore:
+          Type: "S3"
+          Location: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/codepipeline/base-name}}-us-east-2"
+      - Region: "us-west-2"
+        ArtifactStore:
+          Type: "S3"
+          Location: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/codepipeline/base-name}}-us-west-2"
+      Stages:
+      - Name: "Source"
+        Actions:
+        - Name: "IaC_Templates"
+          ActionTypeId:
+            Category: "Source"
+            Owner: "AWS"
+            Provider: "S3"
+            Version: "1"
+          Configuration:
+            S3Bucket: !Sub "{{resolve:ssm:/s3/${InfrastructureName}/bucket/artifact/name}}"
+            S3ObjectKey: !Sub "${ProjectName}/base/${InfrastructureSourceFile}"
+            PollForSourceChanges: "false"
+          OutputArtifacts:
+          - Name: "IAC_SOURCE_FILES"
+      - !If
+        - EnableManualApproval
+        - Name: "Manual_Approval"
+          Actions:
+          - Name: "Approval"
+            ActionTypeId:
+              Category: "Approval"
+              Owner: "AWS"
+              Provider: "Manual"
+              Version: "1"
+            Configuration:
+              CustomData: !Sub "${ApprovalMessagePrefix} \"${ApprovalEnvironment}\" ${ApprovalMessageSuffix}"
+            RunOrder: 1
+        - !Ref "AWS::NoValue"
+      - Name: "IAM_Roles"
+        Actions:
+        - Name: "CodeBuild_Role_Primary_Region"
+          ActionTypeId:
+            Category: "Deploy"
+            Owner: "AWS"
+            Provider: "CloudFormation"
+            Version: "1"
+          Configuration:
+            ActionMode: !Ref ActionMode
+            StackName: !Sub "${InfrastructureName}-codebuild-role-${ServiceSubdomain}-${TagEnvironment}"
+            Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+            TemplatePath:
+              Fn::Sub:
+              - "IAC_SOURCE_FILES::${Folder}iac/cfn/iam/role/codebuild/standard.yaml"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            TemplateConfiguration:
+              Fn::Sub:
+              - "IAC_SOURCE_FILES::${Folder}env/cfn/iam/role/codebuild/standard.json"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            RoleArn: !GetAtt InfrastructureServiceRole.Arn
+            OutputFileName: "out.json"
+            ParameterOverrides: !Sub |
+              {
+                "InfrastructureName": "${InfrastructureName}",
+                "ProjectName": "${ProjectName}",
+                "ExternalArtifactBucket": "${ExternalArtifactBucket}"
+              }
+          InputArtifacts:
+          - Name: "IAC_SOURCE_FILES"
+          OutputArtifacts:
+          - Name: "CODEBUILD_ROLE_OUTPUT_PRIMARY_REGION"
+          RunOrder: 1
+          Region: !Ref "AWS::Region"
+        - Name: "CodePipeline_Deploy_Role_Primary_Region"
+          ActionTypeId:
+            Category: "Deploy"
+            Owner: "AWS"
+            Provider: "CloudFormation"
+            Version: "1"
+          Configuration:
+            ActionMode: !Ref ActionMode
+            StackName: !Sub "${InfrastructureName}-codepipeline-deploy-role-${ServiceSubdomain}-${TagEnvironment}"
+            Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+            TemplatePath:
+              Fn::Sub:
+              - "IAC_SOURCE_FILES::${Folder}iac/cfn/iam/role/codepipeline/deploy.yaml"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            TemplateConfiguration:
+              Fn::Sub:
+              - "IAC_SOURCE_FILES::${Folder}env/cfn/iam/role/codepipeline/deploy.json"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            RoleArn: !GetAtt InfrastructureServiceRole.Arn
+            OutputFileName: "out.json"
+            ParameterOverrides: !Sub |
+              {
+                "ProjectName": "${ProjectName}",
+                "TagEnvironment": "${TagEnvironment}"
+              }
+          InputArtifacts:
+          - Name: "IAC_SOURCE_FILES"
+          OutputArtifacts:
+          - Name: "CODEPIPELINE_DEPLOY_ROLE_OUTPUT_PRIMARY_REGION"
+          RunOrder: 1
+          Region: !Ref "AWS::Region"
+        - !If
+          - SecondRegion
+          - Name: "CodeBuild_Role_Secondary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-codebuild-role-${ServiceSubdomain}-${TagEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/iam/role/codebuild/standard.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/iam/role/codebuild/standard.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: "CODEBUILD_ROLE_OUTPUT_SECONDARY_REGION"
+            RunOrder: 1
+            Region: !Ref SecondRegion
+          - !Ref "AWS::NoValue"
+        - !If
+          - SecondRegion
+          - Name: "CodePipeline_Deploy_Role_Secondary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-codepipeline-deploy-role-${ServiceSubdomain}-${TagEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/iam/role/codepipeline/deploy.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/iam/role/codepipeline/deploy.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                "ProjectName": "${ProjectName}",
+                "TagEnvironment": "${TagEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: "CODEPIPELINE_DEPLOY_ROLE_OUTPUT_SECONDARY_REGION"
+            RunOrder: 1
+            Region: !Ref SecondRegion
+          - !Ref "AWS::NoValue"
+      - Name: "CodeBuild_Projects"
+        Actions:
+        - !If
+          - EnableCustomBuild
+          - Name: "Custom_CodeBuild_Primary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-custom-codebuild-${ServiceSubdomain}-${TagEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/codebuild/build.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/codebuild/build/custom.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}-custom",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "CodeBuildRoleArn": { "Fn::GetParam" : [ "CODEBUILD_ROLE_OUTPUT_PRIMARY_REGION", "out.json", "RoleArn" ] },
+                  "CodeBuildUnstableBranch": "${UnstableBranch}",
+                  "CodeBuildGitHubOAuthTokenName": "${GitHubOAuthTokenName}",
+                  "SecondRegion": "${SecondRegion}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            - Name: "CODEBUILD_ROLE_OUTPUT_PRIMARY_REGION"
+            RunOrder: 3
+            Region: !Ref "AWS::Region"
+          - !Ref "AWS::NoValue"
+        - Name: "Lambda_Test_CodeBuild_Primary_Region"
+          ActionTypeId:
+            Category: "Deploy"
+            Owner: "AWS"
+            Provider: "CloudFormation"
+            Version: "1"
+          Configuration:
+            ActionMode: !Ref ActionMode
+            StackName: !Sub "${InfrastructureName}-lambda-test-codebuild-${ServiceSubdomain}-${TagEnvironment}"
+            Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+            TemplatePath:
+              Fn::Sub:
+              - "IAC_SOURCE_FILES::${Folder}iac/cfn/codebuild/test.yaml"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            TemplateConfiguration:
+              Fn::Sub:
+              - "IAC_SOURCE_FILES::${Folder}env/cfn/codebuild/test/lambda.json"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            RoleArn: !GetAtt InfrastructureServiceRole.Arn
+            OutputFileName: "out.json"
+            ParameterOverrides: !Sub |
+              {
+                "InfrastructureName": "${InfrastructureName}",
+                "ProjectName": "${ProjectName}-lambda-test",
+                "AppBaseFolder": "${AppBaseFolder}",
+                "CodeBuildRoleArn": { "Fn::GetParam" : [ "CODEBUILD_ROLE_OUTPUT_PRIMARY_REGION", "out.json", "RoleArn" ] },
+                "TagEnvironment": "${TagEnvironment}"
+              }
+          InputArtifacts:
+          - Name: "IAC_SOURCE_FILES"
+          - Name: "CODEBUILD_ROLE_OUTPUT_PRIMARY_REGION"
+          OutputArtifacts:
+          - Name: "APP_TEST_CODEBUILD_OUTPUT_PRIMARY_REGION"
+          RunOrder: 4
+          Region: !Ref "AWS::Region"
+        - !If
+          - SecondRegion
+          - Name: "Lambda_Test_CodeBuild_Secondary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-lambda-test-codebuild-${ServiceSubdomain}-${TagEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/codebuild/test.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/codebuild/test/lambda.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}-lambda-test",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "CodeBuildRoleArn": { "Fn::GetParam" : [ "CODEBUILD_ROLE_OUTPUT_SECONDARY_REGION", "out.json", "RoleArn" ] },
+                  "TagEnvironment": "${TagEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            - Name: "CODEBUILD_ROLE_OUTPUT_SECONDARY_REGION"
+            OutputArtifacts:
+            - Name: "APP_TEST_CODEBUILD_OUTPUT_SECONDARY_REGION"
+            RunOrder: 4
+            Region: !Ref SecondRegion
+          - !Ref "AWS::NoValue"
+        - Name: "Infrastructure_Test_CodeBuild_Primary_Region"
+          ActionTypeId:
+            Category: "Deploy"
+            Owner: "AWS"
+            Provider: "CloudFormation"
+            Version: "1"
+          Configuration:
+            ActionMode: !Ref ActionMode
+            StackName: !Sub "${InfrastructureName}-infrastructure-test-codebuild-${ServiceSubdomain}-${TagEnvironment}"
+            Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+            TemplatePath:
+              Fn::Sub:
+              - "IAC_SOURCE_FILES::${Folder}iac/cfn/codebuild/test.yaml"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            TemplateConfiguration:
+              Fn::Sub:
+              - "IAC_SOURCE_FILES::${Folder}env/cfn/codebuild/test/infrastructure.json"
+              - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+            RoleArn: !GetAtt InfrastructureServiceRole.Arn
+            OutputFileName: "out.json"
+            ParameterOverrides: !Sub |
+              {
+                "InfrastructureName": "${InfrastructureName}",
+                "ProjectName": "${ProjectName}-infrastructure-test",
+                "AppBaseFolder": "${AppBaseFolder}",
+                "CodeBuildRoleArn": { "Fn::GetParam" : [ "CODEBUILD_ROLE_OUTPUT_PRIMARY_REGION", "out.json", "RoleArn" ] },
+                "TagEnvironment": "${TagEnvironment}"
+              }
+          InputArtifacts:
+          - Name: "IAC_SOURCE_FILES"
+          - Name: "CODEBUILD_ROLE_OUTPUT_PRIMARY_REGION"
+          OutputArtifacts:
+          - Name: "INFRASTRUCTURE_TEST_CODEBUILD_OUTPUT_PRIMARY_REGION"
+          RunOrder: 5
+          Region: !Ref "AWS::Region"
+        - !If
+          - SecondRegion
+          - Name: "Infrastructure_Test_CodeBuild_Secondary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-infrastructure-test-codebuild-${ServiceSubdomain}-${TagEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/codebuild/test.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/codebuild/test/infrastructure.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}-infrastructure-test",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "CodeBuildRoleArn": { "Fn::GetParam" : [ "CODEBUILD_ROLE_OUTPUT_SECONDARY_REGION", "out.json", "RoleArn" ] },
+                  "TagEnvironment": "${TagEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            - Name: "CODEBUILD_ROLE_OUTPUT_SECONDARY_REGION"
+            OutputArtifacts:
+            - Name: "INFRASTRUCTURE_TEST_CODEBUILD_OUTPUT_SECONDARY_REGION"
+            RunOrder: 5
+            Region: !Ref SecondRegion
+          - !Ref "AWS::NoValue"
+      - Name: "Application_Deployment"
+        Actions:
+        - !If
+          - UnstableEnvironment
+          - Name: !Sub "Deploy_CodePipeline_${UnstableEnvironment}_Primary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-codepipeline-${ServiceSubdomain}-${UnstableEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/codepipeline/deploy.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/codepipeline/deploy/${UnstableEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}",
+                  "BaseArtifactFolder": "${UnstableBranch}",
+                  "CodeBuildLambdaTestProject": "${ProjectName}-lambda-test",
+                  "CodeBuildInfrastructureTestProject": "${ProjectName}-infrastructure-test",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "TestSourceFile": "${TestSourceFile}",
+                  "LambdaSourceFile": "${LambdaSourceFile}",
+                  "LambdaSourcePollForChanges": "No",
+                  "LambdaEnvSourceFile": "${LambdaEnvSourceFile}",
+                  "ProdBucket": "${ExternalArtifactBucket}",
+                  "SecondRegion": "${SecondRegion}",
+                  "SlackNotificationLambda": "${SlackNotificationLambda}",
+                  "Subdomain": "${ServiceSubdomain}",
+                  "HealthCheckPath": "${ServiceHealthCheckPath}",
+                  "SourceFolder": "${UnstableEnvironment}",
+                  "TagEnvironment": "${UnstableEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: !Sub "CODEPIPELINE_OUTPUT_${UnstableEnvironment}_PRIMARY_REGION"
+            RunOrder: 3
+            Region: !Ref "AWS::Region"
+          - !Ref "AWS::NoValue"
+        - !If
+          - InitialEnvironment
+          - Name: !Sub "Deploy_CodePipeline_${InitialEnvironment}_Primary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-codepipeline-${ServiceSubdomain}-${InitialEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/codepipeline/deploy.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/codepipeline/deploy/${InitialEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}",
+                  "CodeBuildLambdaTestProject": "${ProjectName}-lambda-test",
+                  "CodeBuildInfrastructureTestProject": "${ProjectName}-infrastructure-test",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "TestSourceFile": "${TestSourceFile}",
+                  "LambdaSourceFile": "${LambdaSourceFile}",
+                  "LambdaEnvSourceFile": "${LambdaEnvSourceFile}",
+                  "LambdaSourcePollForChanges": "No",
+                  "ProdBucket": "${ExternalArtifactBucket}",
+                  "SecondRegion": "${SecondRegion}",
+                  "SlackNotificationLambda": "${SlackNotificationLambda}",
+                  "Subdomain": "${ServiceSubdomain}",
+                  "HealthCheckPath": "${ServiceHealthCheckPath}",
+                  "SourceFolder": "base",
+                  "TagEnvironment": "${InitialEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: !Sub "CODEPIPELINE_OUTPUT_${InitialEnvironment}_PRIMARY_REGION"
+            RunOrder: 4
+            Region: !Ref "AWS::Region"
+          - !Ref "AWS::NoValue"
+        - !If
+          - QaEnvironment
+          - Name: !Sub "Deploy_CodePipeline_${QaEnvironment}_Primary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-codepipeline-${ServiceSubdomain}-${QaEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/codepipeline/deploy.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/codepipeline/deploy/${QaEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}",
+                  "CodeBuildLambdaTestProject": "${ProjectName}-lambda-test",
+                  "CodeBuildInfrastructureTestProject": "${ProjectName}-infrastructure-test",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "TestSourceFile": "${TestSourceFile}",
+                  "LambdaSourceFile": "${LambdaSourceFile}",
+                  "LambdaEnvSourceFile": "${LambdaEnvSourceFile}",
+                  "ActionMode": "${LambdaActionMode}",
+                  "ProdBucket": "${ExternalArtifactBucket}",
+                  "SecondRegion": "${SecondRegion}",
+                  "SlackNotificationLambda": "${SlackNotificationLambda}",
+                  "Subdomain": "${ServiceSubdomain}",
+                  "HealthCheckPath": "${ServiceHealthCheckPath}",
+                  "SourceFolder": "${QaEnvironment}",
+                  "TagEnvironment": "${QaEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: !Sub "CODEPIPELINE_OUTPUT_${QaEnvironment}_PRIMARY_REGION"
+            RunOrder: 5
+            Region: !Ref "AWS::Region"
+          - !Ref "AWS::NoValue"
+        - !If
+          - StageEnvironment
+          - Name: !Sub "Deploy_CodePipeline_${StageEnvironment}_Primary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-codepipeline-${ServiceSubdomain}-${StageEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/codepipeline/deploy.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/codepipeline/deploy/${StageEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}",
+                  "CodeBuildLambdaTestProject": "${ProjectName}-lambda-test",
+                  "CodeBuildInfrastructureTestProject": "${ProjectName}-infrastructure-test",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "TestSourceFile": "${TestSourceFile}",
+                  "LambdaSourceFile": "${LambdaSourceFile}",
+                  "LambdaEnvSourceFile": "${LambdaEnvSourceFile}",
+                  "ActionMode": "${LambdaActionMode}",
+                  "ProdBucket": "${ExternalArtifactBucket}",
+                  "SecondRegion": "${SecondRegion}",
+                  "SlackNotificationLambda": "${SlackNotificationLambda}",
+                  "Subdomain": "${ServiceSubdomain}",
+                  "HealthCheckPath": "${ServiceHealthCheckPath}",
+                  "SourceFolder": "${StageEnvironment}",
+                  "TagEnvironment": "${StageEnvironment}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: !Sub "CODEPIPELINE_OUTPUT_${StageEnvironment}_PRIMARY_REGION"
+            RunOrder: 6
+            Region: !Ref "AWS::Region"
+          - !Ref "AWS::NoValue"
+        - !If
+          - ProdEnvironment
+          - Name: !Sub "Deploy_CodePipeline_${ProdEnvironment}_Primary_Region"
+            ActionTypeId:
+              Category: "Deploy"
+              Owner: "AWS"
+              Provider: "CloudFormation"
+              Version: "1"
+            Configuration:
+              ActionMode: !Ref ActionMode
+              StackName: !Sub "${InfrastructureName}-codepipeline-${ServiceSubdomain}-${ProdEnvironment}"
+              Capabilities: "CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              TemplatePath:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}iac/cfn/codepipeline/deploy.yaml"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              TemplateConfiguration:
+                Fn::Sub:
+                - "IAC_SOURCE_FILES::${Folder}env/cfn/codepipeline/deploy/${ProdEnvironment}.json"
+                - Folder: !If [ AppBaseFolder, !Sub "${AppBaseFolder}/", "" ]
+              RoleArn: !GetAtt InfrastructureServiceRole.Arn
+              OutputFileName: "out.json"
+              ParameterOverrides: !Sub |
+                {
+                  "InfrastructureName": "${InfrastructureName}",
+                  "ProjectName": "${ProjectName}",
+                  "CodeBuildLambdaTestProject": "${ProjectName}-lambda-test",
+                  "CodeBuildInfrastructureTestProject": "${ProjectName}-infrastructure-test",
+                  "AppBaseFolder": "${AppBaseFolder}",
+                  "TestSourceFile": "${TestSourceFile}",
+                  "LambdaSourceFile": "${LambdaSourceFile}",
+                  "LambdaEnvSourceFile": "${LambdaEnvSourceFile}",
+                  "ActionMode": "${LambdaActionMode}",
+                  "ProdBucket": "${ExternalArtifactBucket}",
+                  "SecondRegion": "${SecondRegion}",
+                  "SlackNotificationLambda": "${SlackNotificationLambda}",
+                  "Subdomain": "${ServiceSubdomain}",
+                  "HealthCheckPath": "${ServiceHealthCheckPath}",
+                  "SourceFolder": "${ProdEnvironment}",
+                  "TagEnvironment": "${ProdEnvironment}",
+                  "UnstableBranch": "${UnstableBranch}"
+                }
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: !Sub "CODEPIPELINE_OUTPUT_${ProdEnvironment}_PRIMARY_REGION"
+            RunOrder: 7
+            Region: !Ref "AWS::Region"
+          - !Ref "AWS::NoValue"
+      - !If
+        - EnableCustomBuild
+        - Name: "Custom"
+          Actions:
+          - Name: "Custom_Build"
+            ActionTypeId:
+              Category: "Build"
+              Owner: "AWS"
+              Provider: "CodeBuild"
+              Version: "1"
+            Configuration:
+              ProjectName: !Sub "${ProjectName}-custom"
+              PrimarySource: "IAC_SOURCE_FILES"
+              EnvironmentVariables: !Sub |
+                [
+                  {
+                    "name":"AWS_SECOND_REGION",
+                    "value":"${SecondRegion}",
+                    "type":"PLAINTEXT"
+                  },
+                  {
+                    "name":"APP_BASE_FOLDER",
+                    "value":"${AppBaseFolder}",
+                    "type":"PLAINTEXT"
+                  }
+                ]
+            InputArtifacts:
+            - Name: "IAC_SOURCE_FILES"
+            OutputArtifacts:
+            - Name: "CUSTOM_BUILD_OUTPUT"
+            RunOrder: 1
+        - !Ref "AWS::NoValue"
+      Tags:
+      - Key: "Name"
+        Value: !Ref "AWS::StackName"
+      - Key: "application"
+        Value: !Ref "AWS::StackName"
+      - Key: "contact-email"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/contact-email}}"
+      - Key: "customer"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/customer}}"
+      - Key: "environment"
+        Value: !Ref TagEnvironment
+      - Key: "team"
+        Value: !Sub "{{resolve:ssm:/account/${InfrastructureName}/tag/team}}"
+Outputs:
+  InfrastructureCodePipelineEventsRuleId:
+    Condition: EnableNotifications
+    Description: "The ID of the infrastructure CodePipeline events rule."
+    Value: !Ref InfrastructureCodePipelineEventsRule
+    Export:
+      Name: !Sub "${AWS::StackName}-InfrastructureCodePipelineEventsRuleId"
+  InfrastructureCodePipelineEventsRuleArn:
+    Condition: EnableNotifications
+    Description: "The ARN of the infrastructure CodePipeline events rule."
+    Value: !GetAtt InfrastructureCodePipelineEventsRule.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-InfrastructureCodePipelineEventsRuleArn"
+  InfrastructureCodePipelineName:
+    Description: "The name of the infrastructure CodePipeline."
+    Value: !Ref InfrastructureCodePipeline
+    Export:
+      Name: !Sub "${AWS::StackName}-InfrastructureCodePipelineName"
+  InfrastructureCodePipelineVersion:
+    Description: "The version of the infrastructure CodePipeline."
+    Value: !GetAtt InfrastructureCodePipeline.Version
+    Export:
+      Name: !Sub "${AWS::StackName}-InfrastructureCodePipelineVersion"
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: "General Configuration"
+      Parameters:
+      - InfrastructureName
+      - SecondRegion
+    - Label:
+        default: "CodePipeline Configuration"
+      Parameters:
+      - ProjectName
+      - InfrastructureSuffix
+      - AppBaseFolder
+      - ActionMode
+      - LambdaActionMode
+      - EnableManualApproval
+      - EnableCustomBuild
+      - UnstableEnvironment
+      - InitialEnvironment
+      - QaEnvironment
+      - StageEnvironment
+      - ProdEnvironment
+    - Label:
+        default: "Manual Approval Configuration"
+      Parameters:
+      - ApprovalMessagePrefix
+      - ApprovalEnvironment
+      - ApprovalMessageSuffix
+    - Label:
+        default: "CodePipeline Notification Configuration"
+      Parameters:
+      - EnableNotifications
+      - SlackNotificationLambda
+    - Label:
+        default: "Source Configuration"
+      Parameters:
+      - GitHubOAuthTokenName
+      - UnstableBranch
+    - Label:
+        default: "ZIP File Configuration"
+      Parameters:
+      - ExternalArtifactBucket
+      - InfrastructureSourceFile
+      - TestSourceFile
+      - LambdaSourceFile
+    - Label:
+        default: "Service Configuration"
+      Parameters:
+      - ServiceSubdomain
+      - ServiceHealthCheckPath
+    - Label:
+        default: "Tags"
+      Parameters:
+      - TagEnvironment
+    ParameterLabels:
+      # General Configuration
+      InfrastructureName:
+        default: "Infrastructure Name:"
+      SecondRegion:
+        default: "Second Region:"
+      # CodePipeline Configuration
+      ProjectName:
+        default: "CodePipeline Project Name:"
+      InfrastructureSuffix:
+        default: "Infrastructure Suffix:"
+      AppBaseFolder:
+        default: "CodePipeline Application Base Folder:"
+      ActionMode:
+        default: "CodePipeline CloudFormation Action Mode:"
+      LambdaActionMode:
+        default: "Service CloudFormation Action Mode:"
+      # Special Feature Configuration
+      EnableManualApproval:
+        default: "Enable Manual Approval:"
+      EnableCustomBuild:
+        default: "Enable Custom Build:"
+      # Manual Approval Configuration
+      ApprovalMessagePrefix:
+        default: "Approval Message Prefix:"
+      ApprovalEnvironment:
+        default: "Approval Environment:"
+      ApprovalMessageSuffix:
+        default: "Approval Message Suffix:"
+      # Environment Configuration
+      UnstableEnvironment:
+        default: "Unstable Environment"
+      InitialEnvironment:
+        default: "Initial Environment:"
+      QaEnvironment:
+        default: "QA Environment:"
+      StageEnvironment:
+        default: "Stage Environment:"
+      ProdEnvironment:
+        default: "Production Environment:"
+      # CodePipeline Notification Configuration
+      EnableNotifications:
+        default: "Enable E-mail and Slack Notifications:"
+      SlackNotificationLambda:
+        default: "Slack Notification Lambda Name:"
+      # Source Configuration
+      GitHubOAuthTokenName:
+        default: "GitHub OAuth Token Name:"
+      UnstableBranch:
+        default: "Unstable GitHub Environment Branch:"
+      # ZIP Configuration
+      ExternalArtifactBucket:
+        default: "External Artifact Bucket Name:"
+      InfrastructureSourceFile:
+        default: "Infrastructure Source ZIP File:"
+      TestSourceFile:
+        default: "Test Source ZIP File:"
+      LambdaSourceFile:
+        default: "Service Source ZIP File:"
+      # Service Configuration
+      ServiceSubdomain:
+        default: "Service Subdomain:"
+      ServiceHealthCheckPath:
+        default: "Service Health Check Path:"
+      # Tags
+      TagEnvironment:
+        default: "Environment:"

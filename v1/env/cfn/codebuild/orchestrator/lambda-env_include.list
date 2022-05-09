@@ -1,0 +1,4 @@
+v1/env/cfn/api-gateway/*
+v1/env/cfn/ec2/*
+v1/env/cfn/lambda/*
+v1/env/cfn/secrets-manager/secret/*
