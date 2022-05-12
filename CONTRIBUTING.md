@@ -41,4 +41,4 @@ Follow these steps:
 
 * [General GitHub documentation](https://help.github.com/).
 * [GitHub pull request documentation](https://docs.github.com/en/free-pro-team@latest/github/collaborating-with-issues-and-pull-requests/about-pull-requests).
-* This document is based off of [Nike's `CONTRIBUTING.md` file](https://github.com/Nike-Inc/gimme-aws-creds/blob/master/CONTRIBUTING.md).
+* The format of this document was inspired by [Nike's `CONTRIBUTING.md` file](https://github.com/Nike-Inc/gimme-aws-creds/blob/master/CONTRIBUTING.md).
